@@ -49,3 +49,21 @@ Win condition: cross the dashed line on the right of the play area.
 | Client | `apps/client` |
 | Server | `apps/server` |
 | Shared types | `packages/shared` |
+
+## Phase 1 status
+
+Implemented:
+
+- Monorepo bootstrapped (pnpm workspaces, ESLint, Prettier, Vitest)
+- NestJS placeholder (`apps/server`) returning `{ status: 'ok', phase: 1 }`
+- PixiJS v8 client with Home / Loading / Game / End scenes
+- Solo sandbox gameplay: 1 player + 20 bots, mouse aim, single bullet, walk/run controls, arrival line victory
+- Asset pipeline copying spritesheets from the original CreateJS project
+- Docker Compose setup (`client` + `server` dev services)
+
+Not yet:
+
+- Networking / multiplayer (Phase 2)
+- Mobile / touch (Phase 3)
+- Audio
+- Real responsive sprite scaling on extreme aspect ratios
