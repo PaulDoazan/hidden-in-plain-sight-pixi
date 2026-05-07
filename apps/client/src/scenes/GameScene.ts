@@ -1,11 +1,7 @@
 import { Container, Graphics, Sprite, Text } from 'pixi.js'
 
 import type { Game } from '../app/Game'
-import {
-  ARRIVAL_LINE_MARGIN,
-  CROSSHAIR_RADIUS,
-  defaultGameConfig,
-} from '../config/gameConfig'
+import { CROSSHAIR_RADIUS, defaultGameConfig } from '../config/gameConfig'
 import { ZOMBIE_SPRITES } from '../config/manifest'
 import { Bot } from '../entities/Bot'
 import { fire } from '../entities/Bullet'
@@ -28,6 +24,7 @@ export class GameScene extends Scene {
   private bots: Bot[] = []
   private crosshair!: Crosshair
   private bulletsRemaining = defaultGameConfig.bulletsPerPlayer
+  private won = false
   private hud!: Text
 
   constructor(private readonly game: Game) {
@@ -65,7 +62,8 @@ export class GameScene extends Scene {
       this.refreshHud()
     }
 
-    if (this.playerZombie.x >= this.game.layout.arrivalLineX) {
+    if (!this.won && this.playerZombie.x >= this.game.layout.arrivalLineX) {
+      this.won = true
       void this.game.sceneManager.goTo(new EndScene(this.game), { won: true })
     }
   }
