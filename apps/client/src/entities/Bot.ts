@@ -21,7 +21,8 @@ export function tickBotState(
   next.countTick -= 1
   if (next.countTick <= 0) {
     next.canMove = !next.canMove
-    next.countTick = rng()
+    const range = cycle.maxTick - cycle.minTick
+    next.countTick = Math.floor(rng() * range) + cycle.minTick
   }
   if (next.canMove) {
     next.x = state.x + cycle.walkSpeed
