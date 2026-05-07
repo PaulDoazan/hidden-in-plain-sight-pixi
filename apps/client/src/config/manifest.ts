@@ -26,8 +26,8 @@ const ZOMBIE_FRAME_COUNTS: Record<ZombieType, Record<ZombieAnimation, number>> =
 function zombieEntry(type: ZombieType, anim: ZombieAnimation): SpriteSheetEntry {
   const fileName: Record<ZombieType, Record<ZombieAnimation, string>> = {
     man:   { walk: 'walk.png',  idle: 'idle.png', die: 'die.png',  run: 'Run.png' },
-    woman: { walk: 'walk.png',  idle: 'Idle.png', die: 'Dead.png', run: 'Run.png' },
-    wild:  { walk: 'Walk.png',  idle: 'Idle.png', die: 'die.png',  run: 'Run.png' },
+    woman: { walk: 'walk.png',  idle: 'idle.png', die: 'die.png',  run: 'Run.png' },
+    wild:  { walk: 'Walk.png',  idle: 'Idle.png', die: 'Dead.png', run: 'Run.png' },
   }
   const count = ZOMBIE_FRAME_COUNTS[type][anim]
   return {
