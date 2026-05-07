@@ -35,8 +35,6 @@ export interface BotDeps extends ZombieDeps {
   rng?: () => number
 }
 
-const integerSeq = () => Math.floor(Math.random() * 1_000_000)
-
 export class Bot extends Zombie {
   private state: BotState
   private readonly cycle: BotCycleConfig
@@ -49,7 +47,7 @@ export class Bot extends Zombie {
     const range = deps.cycle.maxTick - deps.cycle.minTick
     this.state = {
       canMove: false,
-      countTick: (integerSeq() % range) + deps.cycle.minTick,
+      countTick: Math.floor(this.rng() * range) + deps.cycle.minTick,
       x: this.x,
     }
   }
