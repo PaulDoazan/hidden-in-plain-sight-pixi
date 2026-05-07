@@ -1,0 +1,30 @@
+{
+  "name": "hidden-in-plain-sight-pixi",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter './apps/*' dev",
+    "dev:client": "pnpm --filter client dev",
+    "dev:server": "pnpm --filter server start:dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.10.0",
+    "@typescript-eslint/parser": "^8.10.0",
+    "eslint": "^9.13.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.31.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.6.0"
+  }
+}
