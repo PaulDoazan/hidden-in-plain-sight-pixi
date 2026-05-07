@@ -19,7 +19,7 @@ export function fire({ origin, radius, zombies, layer, assets }: FireParams): Zo
   if (!target) return null
 
   const splat = new BloodSplat(assets)
-  splat.position.set(target.x, target.y - 50)
+  splat.position.set(origin.x, origin.y)
   layer.addChild(splat)
 
   target.die()
