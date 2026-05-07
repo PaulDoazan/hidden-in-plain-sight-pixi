@@ -111,6 +111,7 @@ export class GameScene extends Scene {
 
   private spawnBots(): void {
     const cycle = { minTick: 40, maxTick: 200, walkSpeed: defaultGameConfig.walkSpeed }
+    const zScale = this.game.layout.zombieScale
     for (let i = 0; i < defaultGameConfig.numBots; i++) {
       const type = TYPES[i % TYPES.length]!
       const bot = new Bot({
@@ -122,6 +123,7 @@ export class GameScene extends Scene {
       // World coordinates: spawn in the left half of the world.
       bot.x = 60 + Math.random() * (WORLD_WIDTH / 2)
       bot.y = WORLD_HEIGHT * (0.3 + Math.random() * 0.6) + 100
+      bot.scale.set(zScale)
       this.gameLayer.addChild(bot)
       this.bots.push(bot)
     }
@@ -139,6 +141,7 @@ export class GameScene extends Scene {
     // World coordinates: far-left, vertically centered (with vertical offset).
     this.playerZombie.x = 30
     this.playerZombie.y = WORLD_HEIGHT / 2 + 100
+    this.playerZombie.scale.set(this.game.layout.zombieScale)
     this.gameLayer.addChild(this.playerZombie)
   }
 

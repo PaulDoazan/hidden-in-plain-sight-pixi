@@ -45,4 +45,22 @@ describe('Layout', () => {
     expect(layout.playArea.width).toBe(1920)
     expect(layout.worldScale).toBe(1)
   })
+
+  it('zombieScale is 1 on desktop and capped at 2× on small screens', () => {
+    const layout = new Layout(WORLD)
+    layout.recompute({ innerWidth: 1920, innerHeight: 1080 })
+    expect(layout.zombieScale).toBe(1)
+
+    layout.recompute({ innerWidth: 960, innerHeight: 1000 }) // worldScale = 0.5
+    expect(layout.zombieScale).toBe(2)
+
+    layout.recompute({ innerWidth: 480, innerHeight: 1000 }) // worldScale = 0.25 → would be 4×
+    expect(layout.zombieScale).toBe(2) // capped
+  })
+
+  it('honours a custom maxZombieScale', () => {
+    const layout = new Layout({ ...WORLD, maxZombieScale: 1.5 })
+    layout.recompute({ innerWidth: 480, innerHeight: 1000 })
+    expect(layout.zombieScale).toBe(1.5)
+  })
 })

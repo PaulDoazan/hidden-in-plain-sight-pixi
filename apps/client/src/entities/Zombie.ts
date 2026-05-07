@@ -70,11 +70,16 @@ export abstract class Zombie extends Container {
   }
 
   get aabb(): AABB {
+    // The hit box follows whatever scale the zombie has been given (e.g. 2× on
+    // small screens — see GameScene.spawnBots / spawnPlayer), so the visual
+    // sprite and the click target stay aligned.
+    const sx = this.scale.x
+    const sy = this.scale.y
     return {
-      x: this.x - SPRITE_FRAME_WIDTH / 2,
-      y: this.y - SPRITE_FRAME_HEIGHT,
-      width: SPRITE_FRAME_WIDTH,
-      height: SPRITE_FRAME_HEIGHT,
+      x: this.x - (SPRITE_FRAME_WIDTH * sx) / 2,
+      y: this.y - SPRITE_FRAME_HEIGHT * sy,
+      width: SPRITE_FRAME_WIDTH * sx,
+      height: SPRITE_FRAME_HEIGHT * sy,
     }
   }
 
