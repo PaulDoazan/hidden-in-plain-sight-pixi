@@ -54,6 +54,9 @@ export class Bot extends Zombie {
 
   override update(_delta: number): void {
     if (!this.isAlive) return
+    // Sync state.x from container position so the spawner's positioning is honored
+    // on the first frame, and any external repositioning is picked up.
+    this.state.x = this.x
     const previous = this.state
     this.state = tickBotState(this.state, this.cycle, this.rng)
     this.x = this.state.x

@@ -14,7 +14,7 @@ export abstract class Zombie extends Container {
   readonly id: string
   readonly type: ZombieType
   isAlive = true
-  private current: ZombieAnimation = 'idle'
+  private current: ZombieAnimation | null = null
   private readonly sprites: Record<ZombieAnimation, AnimatedSprite>
 
   constructor(deps: ZombieDeps) {
