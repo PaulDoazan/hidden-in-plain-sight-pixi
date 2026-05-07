@@ -1,4 +1,5 @@
 import { Container, Graphics, Sprite, Text } from 'pixi.js'
+import type { ZombieAnimation, ZombieType } from '@hips/shared'
 
 import type { Game } from '../app/Game'
 import { CROSSHAIR_RADIUS, defaultGameConfig } from '../config/gameConfig'
@@ -11,8 +12,6 @@ import type { Zombie } from '../entities/Zombie'
 
 import { EndScene } from './EndScene'
 import { Scene } from './Scene'
-
-import type { ZombieAnimation, ZombieType } from '@hips/shared'
 
 const TYPES: ZombieType[] = ['man', 'woman', 'wild']
 

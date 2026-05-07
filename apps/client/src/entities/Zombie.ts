@@ -1,5 +1,4 @@
 import { AnimatedSprite, Container, Rectangle, Texture } from 'pixi.js'
-
 import type { ZombieAnimation, ZombieType } from '@hips/shared'
 
 import { SPRITE_FRAME_HEIGHT, SPRITE_FRAME_WIDTH } from '../config/manifest'
