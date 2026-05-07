@@ -2,7 +2,12 @@ import { Container, Graphics, Sprite, Text } from 'pixi.js'
 import type { ZombieAnimation, ZombieType } from '@hips/shared'
 
 import type { Game } from '../app/Game'
-import { CROSSHAIR_RADIUS, defaultGameConfig } from '../config/gameConfig'
+import {
+  CROSSHAIR_RADIUS,
+  WORLD_HEIGHT,
+  WORLD_WIDTH,
+  defaultGameConfig,
+} from '../config/gameConfig'
 import { ZOMBIE_SPRITES } from '../config/manifest'
 import { Bot } from '../entities/Bot'
 import { fire } from '../entities/Bullet'
@@ -50,16 +55,27 @@ export class GameScene extends Scene {
     this.bots.forEach((b) => b.update(_delta))
     this.playerZombie.update(_delta)
 
+    // Crosshair lives in screen space (constant visual size).
     this.crosshair.position.set(this.game.input.pointer.x, this.game.input.pointer.y)
 
     if (this.game.input.consumeFire() && this.bulletsRemaining > 0) {
       this.bulletsRemaining -= 1
       const allZombies: Zombie[] = [...this.bots, this.playerZombie]
+      // Convert the screen-space crosshair position to gameLayer-local (world) coords
+      // so collision detection happens in the same frame of reference as zombie aabbs.
+      const worldOrigin = this.gameLayer.toLocal({
+        x: this.crosshair.x,
+        y: this.crosshair.y,
+      })
+      // The visual crosshair is fixed at CROSSHAIR_RADIUS px on screen — divide by
+      // worldScale to get the equivalent world-space radius.
+      const worldRadius = CROSSHAIR_RADIUS / this.game.layout.worldScale
       fire({
-        origin: { x: this.crosshair.x, y: this.crosshair.y },
-        radius: CROSSHAIR_RADIUS,
+        origin: worldOrigin,
+        radius: worldRadius,
         zombies: allZombies,
-        layer: this.effectsLayer,
+        // Splat is added to the gameLayer so it scales with the world.
+        layer: this.gameLayer,
         assets: this.game.assets,
       })
       this.refreshHud()
@@ -76,6 +92,13 @@ export class GameScene extends Scene {
     this.gameLayer = new Container()
     this.effectsLayer = new Container()
     this.addChild(this.bgLayer, this.gameLayer, this.effectsLayer)
+
+    // Position and scale the gameLayer so its world coordinates land inside the
+    // play area on screen. Every entity, the arrival line, and any splat added
+    // to gameLayer is expressed in world units (0..WORLD_WIDTH × 0..WORLD_HEIGHT).
+    const { playArea, worldScale } = this.game.layout
+    this.gameLayer.position.set(playArea.x, playArea.y)
+    this.gameLayer.scale.set(worldScale)
   }
 
   private buildBackground(): void {
@@ -87,7 +110,6 @@ export class GameScene extends Scene {
   }
 
   private spawnBots(): void {
-    const { playArea } = this.game.layout
     const cycle = { minTick: 40, maxTick: 200, walkSpeed: defaultGameConfig.walkSpeed }
     for (let i = 0; i < defaultGameConfig.numBots; i++) {
       const type = TYPES[i % TYPES.length]!
@@ -97,15 +119,15 @@ export class GameScene extends Scene {
         frameCounts: this.zombieFrameCounts(type),
         cycle,
       })
-      bot.x = playArea.x + 60 + Math.random() * (playArea.width / 2)
-      bot.y = playArea.y + playArea.height * (0.3 + Math.random() * 0.6)
+      // World coordinates: spawn in the left half of the world.
+      bot.x = 60 + Math.random() * (WORLD_WIDTH / 2)
+      bot.y = WORLD_HEIGHT * (0.3 + Math.random() * 0.6)
       this.gameLayer.addChild(bot)
       this.bots.push(bot)
     }
   }
 
   private spawnPlayer(): void {
-    const { playArea } = this.game.layout
     this.playerZombie = new PlayerZombie({
       type: 'man',
       textures: this.zombieTextures('man'),
@@ -114,8 +136,9 @@ export class GameScene extends Scene {
       walkSpeed: defaultGameConfig.walkSpeed,
       runSpeed: defaultGameConfig.runSpeed,
     })
-    this.playerZombie.x = playArea.x + 30
-    this.playerZombie.y = playArea.y + playArea.height / 2
+    // World coordinates: far-left, vertically centered.
+    this.playerZombie.x = 30
+    this.playerZombie.y = WORLD_HEIGHT / 2
     this.gameLayer.addChild(this.playerZombie)
   }
 
@@ -129,13 +152,13 @@ export class GameScene extends Scene {
   }
 
   private drawArrivalLine(): void {
-    const { arrivalLineX, playArea } = this.game.layout
+    const arrivalLineX = this.game.layout.arrivalLineX
     const line = new Graphics()
     const dashHeight = 14
     const gap = 8
-    let y = playArea.y
-    while (y < playArea.y + playArea.height) {
-      line.moveTo(arrivalLineX, y).lineTo(arrivalLineX, Math.min(y + dashHeight, playArea.y + playArea.height))
+    let y = 0
+    while (y < WORLD_HEIGHT) {
+      line.moveTo(arrivalLineX, y).lineTo(arrivalLineX, Math.min(y + dashHeight, WORLD_HEIGHT))
       y += dashHeight + gap
     }
     line.stroke({ width: 3, color: 0xfff700 })

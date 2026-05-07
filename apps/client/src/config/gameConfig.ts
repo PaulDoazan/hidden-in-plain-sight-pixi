@@ -1,11 +1,19 @@
 import type { GameConfig } from '@hips/shared'
 
+// Virtual world: a fixed-size coordinate system. Every entity position, speed,
+// and the arrival line are expressed in these units. The GameScene scales the
+// gameLayer so the world fits the on-screen play area, which keeps gameplay
+// proportions identical across screen sizes — critical for the Phase 2 multi-
+// player where each client may have a different resolution.
+export const WORLD_WIDTH = 1920
+export const WORLD_HEIGHT = 886
+
 export const defaultGameConfig: GameConfig = {
   numBots: 20,
   walkSpeed: 0.5,
   runSpeed: 1.2,
   bulletsPerPlayer: 1,
-  playAreaRatio: 19.5 / 9,
+  playAreaRatio: WORLD_WIDTH / WORLD_HEIGHT,
 }
 
 export const CROSSHAIR_RADIUS = 25
