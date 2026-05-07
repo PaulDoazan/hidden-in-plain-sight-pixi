@@ -121,7 +121,7 @@ export class GameScene extends Scene {
       })
       // World coordinates: spawn in the left half of the world.
       bot.x = 60 + Math.random() * (WORLD_WIDTH / 2)
-      bot.y = WORLD_HEIGHT * (0.3 + Math.random() * 0.6)
+      bot.y = WORLD_HEIGHT * (0.3 + Math.random() * 0.6) + 100
       this.gameLayer.addChild(bot)
       this.bots.push(bot)
     }
@@ -136,9 +136,9 @@ export class GameScene extends Scene {
       walkSpeed: defaultGameConfig.walkSpeed,
       runSpeed: defaultGameConfig.runSpeed,
     })
-    // World coordinates: far-left, vertically centered.
+    // World coordinates: far-left, vertically centered (with vertical offset).
     this.playerZombie.x = 30
-    this.playerZombie.y = WORLD_HEIGHT / 2
+    this.playerZombie.y = WORLD_HEIGHT / 2 + 100
     this.gameLayer.addChild(this.playerZombie)
   }
 
