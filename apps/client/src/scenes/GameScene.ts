@@ -38,6 +38,10 @@ export class GameScene extends Scene {
     this.spawnCrosshair()
     this.drawArrivalLine()
     this.buildHud()
+    // Drain any stale fire flag set by the click that triggered the scene transition
+    // (e.g. clicking the "Jouer" button on HomeScene → LoadingScene → here). Without
+    // this, the very first update consumes that click and burns the only bullet.
+    this.game.input.consumeFire()
   }
 
   onExit(): void {}
