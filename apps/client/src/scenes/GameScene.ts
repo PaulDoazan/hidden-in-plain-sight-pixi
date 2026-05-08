@@ -61,6 +61,11 @@ export class GameScene extends Scene {
     this.bots.forEach((b) => b.update(_delta))
     this.playerZombie.update(_delta)
 
+    // Depth sort by feet y so a zombie nearer the bottom of the screen always
+    // overlaps zombies further up.
+    for (const bot of this.bots) bot.zIndex = bot.y
+    this.playerZombie.zIndex = this.playerZombie.y
+
     // Crosshair lives in screen space (constant visual size).
     this.crosshair.position.set(this.game.input.pointer.x, this.game.input.pointer.y)
 
@@ -105,6 +110,9 @@ export class GameScene extends Scene {
     const { playArea, worldScale } = this.game.layout
     this.gameLayer.position.set(playArea.x, playArea.y)
     this.gameLayer.scale.set(worldScale)
+    // Pseudo-3D depth sorting: a zombie's feet are at its anchor y, so children
+    // with higher y are rendered on top. update() syncs zIndex = y each frame.
+    this.gameLayer.sortableChildren = true
   }
 
   private buildBackground(): void {
