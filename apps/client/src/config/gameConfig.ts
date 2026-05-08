@@ -12,7 +12,10 @@ export const defaultGameConfig: GameConfig = {
   numBots: 20,
   walkSpeed: 0.5,
   runSpeed: 1.2,
-  bulletsPerPlayer: 1,
+  // TODO Phase 1 testing: keep ammo infinite so we can stress-test aim precision
+  // on adjacent zombies. Switch back to 1 (or read from a config screen) before
+  // shipping multiplayer.
+  bulletsPerPlayer: Infinity,
   playAreaRatio: WORLD_WIDTH / WORLD_HEIGHT,
 }
 

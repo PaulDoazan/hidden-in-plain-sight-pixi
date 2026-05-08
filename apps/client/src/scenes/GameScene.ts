@@ -199,7 +199,10 @@ export class GameScene extends Scene {
   }
 
   private refreshHud(): void {
-    this.hud.text = `Balles : ${this.bulletsRemaining}`
+    const value = Number.isFinite(this.bulletsRemaining)
+      ? String(this.bulletsRemaining)
+      : '∞'
+    this.hud.text = `Balles : ${value}`
   }
 
   private zombieTextures(type: ZombieType): Record<ZombieAnimation, ReturnType<typeof this.game.assets.get>> {
