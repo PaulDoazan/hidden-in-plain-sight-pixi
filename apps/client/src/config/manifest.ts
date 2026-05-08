@@ -64,6 +64,14 @@ export const SHOT_SPRITES: SpriteSheetEntry[] = [
     frameHeight: 205,
     cols: 4,
   },
+  {
+    alias: 'fireShot',
+    src: '/assets/shots/fireShot.png',
+    frameCount: 16,
+    frameWidth: 64,
+    frameHeight: 64,
+    cols: 4,
+  },
 ]
 
 export const BACKGROUND_IMAGES: ImageEntry[] = [
