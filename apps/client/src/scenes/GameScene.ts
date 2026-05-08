@@ -6,7 +6,6 @@ import {
   ARRIVAL_LINE_TOP_Y,
   CROSSHAIR_RADIUS,
   WORLD_HEIGHT,
-  WORLD_WIDTH,
   defaultGameConfig,
 } from '../config/gameConfig'
 import { ZOMBIE_SPRITES } from '../config/manifest'
