@@ -163,13 +163,17 @@ export class GameScene extends Scene {
   }
 
   private drawArrivalLine(): void {
-    const arrivalLineX = this.game.layout.arrivalLineX
+    const { arrivalLineX, canvasHeight, playArea, worldScale } = this.game.layout
+    // The line extends past WORLD_HEIGHT down to the bottom of the screen
+    // (through the bottom letterbox). Convert canvas bottom to gameLayer-local
+    // coordinates so the dash loop can run in world units.
+    const bottomWorldY = (canvasHeight - playArea.y) / worldScale
     const line = new Graphics()
     const dashHeight = 14
     const gap = 8
     let y = ARRIVAL_LINE_TOP_Y
-    while (y < WORLD_HEIGHT) {
-      line.moveTo(arrivalLineX, y).lineTo(arrivalLineX, Math.min(y + dashHeight, WORLD_HEIGHT))
+    while (y < bottomWorldY) {
+      line.moveTo(arrivalLineX, y).lineTo(arrivalLineX, Math.min(y + dashHeight, bottomWorldY))
       y += dashHeight + gap
     }
     line.stroke({ width: 3, color: 0xfff700 })
