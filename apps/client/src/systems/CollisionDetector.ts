@@ -40,7 +40,10 @@ export function findNearestZombieWithin<T extends CollidableZombie>(
   const alive = zombies.filter((z) => z.isAlive)
   const containing = alive.filter((z) => isPointInAABB(point, z.aabb))
   if (containing.length > 0) {
-    containing.sort((a, b) => distance(point, a) - distance(point, b))
+    // When several zombies overlap the crosshair, the bullet hits the one
+    // visually in front. With the (0.5, 1) anchor and the gameLayer y-sort,
+    // "in front" == "highest y" (lower on screen, drawn last).
+    containing.sort((a, b) => b.y - a.y)
     return containing[0] ?? null
   }
   const within = alive.filter((z) => distance(point, z) <= radius)

@@ -38,9 +38,19 @@ describe('findNearestZombieWithin', () => {
     expect(findNearestZombieWithin({ x: 0, y: 0 }, zombies, 50)).toBeNull()
   })
 
-  it('returns the closest zombie whose AABB contains the point', () => {
+  it('returns the frontmost zombie (highest y) whose AABB contains the point', () => {
+    // back zombie a: feet at y=100, AABB y ∈ [20, 100]
+    // front zombie b: feet at y=140, AABB y ∈ [60, 140]
+    // Both contain the click at (100, 80); the bullet must hit b (in front).
     const z1 = makeZombie('a', 100, 100)
-    const z2 = makeZombie('b', 105, 100)
+    const z2 = makeZombie('b', 100, 140)
+    const result = findNearestZombieWithin({ x: 100, y: 80 }, [z1, z2], 200)
+    expect(result?.id).toBe('b')
+  })
+
+  it('returns the only containing zombie when there is no overlap', () => {
+    const z1 = makeZombie('a', 100, 100)
+    const z2 = makeZombie('b', 300, 100)
     const result = findNearestZombieWithin({ x: 100, y: 50 }, [z1, z2], 200)
     expect(result?.id).toBe('a')
   })
