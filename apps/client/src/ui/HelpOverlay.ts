@@ -16,7 +16,7 @@ export class HelpOverlay extends Container {
 
     const dim = new Graphics()
       .rect(0, 0, layoutWidth, layoutHeight)
-      .fill({ color: 0x000000, alpha: 0.7 })
+      .fill({ color: 0x000000, alpha: 0.92 })
     this.addChild(dim)
 
     const title = new Text({
