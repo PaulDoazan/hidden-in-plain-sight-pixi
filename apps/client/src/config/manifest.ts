@@ -21,9 +21,9 @@ export const SPRITE_FRAME_HEIGHT = 96
 // frames are 96×96 but the visible body covers a much smaller area, so we
 // keep a tight box centered horizontally and resting on the anchor (feet).
 export const ZOMBIE_BODY_BOX: Record<ZombieType, { width: number; height: number }> = {
-  man:   { width: 40, height: 75 },
-  woman: { width: 40, height: 75 },
-  wild:  { width: 75, height: 45 },
+  man:   { width: 40, height: 55 },
+  woman: { width: 40, height: 55 },
+  wild:  { width: 75, height: 25 },
 }
 
 const ZOMBIE_FRAME_COUNTS: Record<ZombieType, Record<ZombieAnimation, number>> = {
