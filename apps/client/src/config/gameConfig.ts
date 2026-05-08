@@ -19,6 +19,11 @@ export const defaultGameConfig: GameConfig = {
   playAreaRatio: WORLD_WIDTH / WORLD_HEIGHT,
 }
 
+// Debug: render each zombie's collision AABB as a translucent blue rectangle
+// so the player can visualise aim precision during testing. Set to false
+// before shipping.
+export const DEBUG_HITBOXES = true
+
 export const CROSSHAIR_RADIUS = 25
 // Distance from the right edge of the world to the arrival line (world units).
 export const ARRIVAL_LINE_MARGIN = 80

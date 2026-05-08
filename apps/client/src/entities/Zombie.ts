@@ -1,6 +1,7 @@
-import { AnimatedSprite, Container, Rectangle, Texture } from 'pixi.js'
+import { AnimatedSprite, Container, Graphics, Rectangle, Texture } from 'pixi.js'
 import type { ZombieAnimation, ZombieType } from '@hips/shared'
 
+import { DEBUG_HITBOXES } from '../config/gameConfig'
 import { SPRITE_FRAME_HEIGHT, SPRITE_FRAME_WIDTH } from '../config/manifest'
 import type { AABB } from '../systems/CollisionDetector'
 
@@ -52,6 +53,22 @@ export abstract class Zombie extends Container {
     }
 
     this.playAnimation('idle')
+
+    if (DEBUG_HITBOXES) {
+      // Translucent blue rectangle drawn in the Zombie's local frame, matching
+      // the AABB returned by `get aabb()`. Anchor (0.5, 1) on the sprites maps
+      // local (0, 0) to the bottom-center, so the rect spans
+      // x ∈ [-W/2, W/2] and y ∈ [-H, 0].
+      const hitbox = new Graphics()
+        .rect(
+          -SPRITE_FRAME_WIDTH / 2,
+          -SPRITE_FRAME_HEIGHT,
+          SPRITE_FRAME_WIDTH,
+          SPRITE_FRAME_HEIGHT,
+        )
+        .fill({ color: 0x4488ff, alpha: 0.5 })
+      this.addChild(hitbox)
+    }
   }
 
   playAnimation(name: ZombieAnimation): void {
