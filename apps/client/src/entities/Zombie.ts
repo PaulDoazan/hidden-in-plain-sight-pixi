@@ -2,7 +2,7 @@ import { AnimatedSprite, Container, Graphics, Rectangle, Texture } from 'pixi.js
 import type { ZombieAnimation, ZombieType } from '@hips/shared'
 
 import { DEBUG_HITBOXES } from '../config/gameConfig'
-import { SPRITE_FRAME_HEIGHT, SPRITE_FRAME_WIDTH } from '../config/manifest'
+import { SPRITE_FRAME_HEIGHT, SPRITE_FRAME_WIDTH, ZOMBIE_BODY_BOX } from '../config/manifest'
 import type { AABB } from '../systems/CollisionDetector'
 
 export interface ZombieDeps {
@@ -55,17 +55,12 @@ export abstract class Zombie extends Container {
     this.playAnimation('idle')
 
     if (DEBUG_HITBOXES) {
-      // Translucent blue rectangle drawn in the Zombie's local frame, matching
-      // the AABB returned by `get aabb()`. Anchor (0.5, 1) on the sprites maps
-      // local (0, 0) to the bottom-center, so the rect spans
-      // x ∈ [-W/2, W/2] and y ∈ [-H, 0].
+      // Translucent blue rectangle matching the AABB returned by `get aabb()`.
+      // Anchor (0.5, 1) maps local (0, 0) to the bottom-center, so the rect
+      // spans x ∈ [-W/2, W/2] and y ∈ [-H, 0] using the per-type body box.
+      const box = ZOMBIE_BODY_BOX[deps.type]
       const hitbox = new Graphics()
-        .rect(
-          -SPRITE_FRAME_WIDTH / 2,
-          -SPRITE_FRAME_HEIGHT,
-          SPRITE_FRAME_WIDTH,
-          SPRITE_FRAME_HEIGHT,
-        )
+        .rect(-box.width / 2, -box.height, box.width, box.height)
         .fill({ color: 0x4488ff, alpha: 0.1 })
       this.addChild(hitbox)
     }
@@ -89,14 +84,17 @@ export abstract class Zombie extends Container {
   get aabb(): AABB {
     // The hit box follows whatever scale the zombie has been given (e.g. 2× on
     // small screens — see GameScene.spawnBots / spawnPlayer), so the visual
-    // sprite and the click target stay aligned.
+    // sprite and the click target stay aligned. The box is per-type to track
+    // the zombie's actual silhouette (standing vs. crawling), not the full
+    // 96×96 frame.
     const sx = this.scale.x
     const sy = this.scale.y
+    const box = ZOMBIE_BODY_BOX[this.type]
     return {
-      x: this.x - (SPRITE_FRAME_WIDTH * sx) / 2,
-      y: this.y - SPRITE_FRAME_HEIGHT * sy,
-      width: SPRITE_FRAME_WIDTH * sx,
-      height: SPRITE_FRAME_HEIGHT * sy,
+      x: this.x - (box.width * sx) / 2,
+      y: this.y - box.height * sy,
+      width: box.width * sx,
+      height: box.height * sy,
     }
   }
 
