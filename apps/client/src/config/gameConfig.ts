@@ -17,5 +17,9 @@ export const defaultGameConfig: GameConfig = {
 }
 
 export const CROSSHAIR_RADIUS = 25
-export const ARRIVAL_LINE_MARGIN = 30
+// Distance from the right edge of the world to the arrival line (world units).
+export const ARRIVAL_LINE_MARGIN = 80
+// Vertical offset where the dashed arrival line starts (top edge in world units).
+// The line then extends down to WORLD_HEIGHT.
+export const ARRIVAL_LINE_TOP_Y = 250
 export const CROSSHAIR_COLOR = 0xfff700

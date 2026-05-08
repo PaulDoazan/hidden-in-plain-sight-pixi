@@ -3,6 +3,7 @@ import type { ZombieAnimation, ZombieType } from '@hips/shared'
 
 import type { Game } from '../app/Game'
 import {
+  ARRIVAL_LINE_TOP_Y,
   CROSSHAIR_RADIUS,
   WORLD_HEIGHT,
   WORLD_WIDTH,
@@ -166,7 +167,7 @@ export class GameScene extends Scene {
     const line = new Graphics()
     const dashHeight = 14
     const gap = 8
-    let y = 0
+    let y = ARRIVAL_LINE_TOP_Y
     while (y < WORLD_HEIGHT) {
       line.moveTo(arrivalLineX, y).lineTo(arrivalLineX, Math.min(y + dashHeight, WORLD_HEIGHT))
       y += dashHeight + gap
