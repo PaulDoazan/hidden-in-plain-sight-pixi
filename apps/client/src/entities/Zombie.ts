@@ -66,7 +66,7 @@ export abstract class Zombie extends Container {
           SPRITE_FRAME_WIDTH,
           SPRITE_FRAME_HEIGHT,
         )
-        .fill({ color: 0x4488ff, alpha: 0.5 })
+        .fill({ color: 0x4488ff, alpha: 0.1 })
       this.addChild(hitbox)
     }
   }
