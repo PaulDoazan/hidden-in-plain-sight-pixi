@@ -20,9 +20,8 @@ export const defaultGameConfig: GameConfig = {
 }
 
 // Debug: render each zombie's collision AABB as a translucent blue rectangle
-// so the player can visualise aim precision during testing. Set to false
-// before shipping.
-export const DEBUG_HITBOXES = true
+// so the player can visualise aim precision during testing.
+export const DEBUG_HITBOXES = false
 
 export const CROSSHAIR_RADIUS = 25
 // Distance from the right edge of the world to the arrival line (world units).
