@@ -1,5 +1,6 @@
 import { Container, Graphics, Sprite, Text } from 'pixi.js'
 import type { ZombieAnimation, ZombieType } from '@hips/shared'
+import { SPAWN_BAND_WIDTH, SPAWN_BAND_X } from '@hips/shared'
 
 import type { Game } from '../app/Game'
 import {
@@ -20,10 +21,6 @@ import { Scene } from './Scene'
 
 const TYPES: ZombieType[] = ['man', 'woman', 'wild']
 
-// Starting band (world coordinates): every zombie spawns somewhere in
-// [START_BAND_X, START_BAND_X + START_BAND_WIDTH] on the x axis.
-const START_BAND_X = 30
-const START_BAND_WIDTH = 40
 
 export class GameScene extends Scene {
   private bgLayer!: Container
@@ -135,7 +132,7 @@ export class GameScene extends Scene {
       })
       // All zombies start on the same vertical starting line, slightly jittered
       // inside a 40-world-unit-wide band so they don't perfectly overlap.
-      bot.x = START_BAND_X + Math.random() * START_BAND_WIDTH
+      bot.x = SPAWN_BAND_X + Math.random() * SPAWN_BAND_WIDTH
       bot.y = WORLD_HEIGHT * (0.3 + Math.random() * 0.6) + 100
       bot.scale.set(zScale)
       this.gameLayer.addChild(bot)
@@ -154,7 +151,7 @@ export class GameScene extends Scene {
     })
     // Same starting band as bots — so the player isn't identifiable just by
     // their x position when multiplayer arrives in Phase 2.
-    this.playerZombie.x = START_BAND_X + Math.random() * START_BAND_WIDTH
+    this.playerZombie.x = SPAWN_BAND_X + Math.random() * SPAWN_BAND_WIDTH
     this.playerZombie.y = WORLD_HEIGHT / 2 + 100
     this.playerZombie.scale.set(this.game.layout.zombieScale)
     this.gameLayer.addChild(this.playerZombie)

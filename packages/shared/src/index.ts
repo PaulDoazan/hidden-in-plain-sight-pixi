@@ -1,5 +1,5 @@
-export type ZombieType = 'man' | 'woman' | 'wild'
-export type ZombieAnimation = 'walk' | 'idle' | 'die' | 'run'
+export * from './zombie'
+import type { ZombieAnimation, ZombieType } from './zombie'
 
 export interface GameConfig {
   numBots: number

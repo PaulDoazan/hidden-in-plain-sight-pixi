@@ -1,4 +1,4 @@
-import type { ZombieAnimation, ZombieType } from './index'
+import type { ZombieAnimation, ZombieType } from './zombie'
 
 export interface PlayerState {
   id: string
