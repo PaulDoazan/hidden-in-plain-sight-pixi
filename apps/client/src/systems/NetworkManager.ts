@@ -32,8 +32,11 @@ export class NetworkManager {
     this.socket.on(event, handler as never)
   }
 
-  off<E extends keyof ServerToClientEvents>(event: E): void {
-    this.socket?.removeAllListeners(event)
+  off<E extends keyof ServerToClientEvents>(
+    event: E,
+    handler: ServerToClientEvents[E],
+  ): void {
+    this.socket?.off(event, handler as never)
   }
 
   emit<E extends keyof ClientToServerEvents>(

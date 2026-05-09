@@ -34,6 +34,7 @@ export class GameScene extends Scene {
   private hud!: Text
   private waitingOverlay: WaitingRoomOverlay | null = null
   private lastLobby: LobbyStatePayload = { players: [], status: 'waiting' }
+  private lobbyHandler: ((payload: LobbyStatePayload) => void) | null = null
 
   constructor(private readonly game: Game) {
     super()
@@ -45,13 +46,17 @@ export class GameScene extends Scene {
     this.showWaitingOverlay()
 
     this.game.net.connect()
-    this.game.net.on('lobby-state', (payload) => this.applyLobby(payload))
+    this.lobbyHandler = (payload) => this.applyLobby(payload)
+    this.game.net.on('lobby-state', this.lobbyHandler)
   }
 
   onExit(): void {
     this.waitingOverlay?.destroy({ children: true })
     this.waitingOverlay = null
-    this.game.net.off('lobby-state')
+    if (this.lobbyHandler) {
+      this.game.net.off('lobby-state', this.lobbyHandler)
+      this.lobbyHandler = null
+    }
   }
 
   update(_delta: number): void {
