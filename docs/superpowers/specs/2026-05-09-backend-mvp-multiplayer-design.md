@@ -126,7 +126,8 @@ The client must adopt these constants in place of the values currently in `apps/
 
 // Client → Server
 export interface ClientToServerEvents {
-  start: () => void
+  start: () => void // host only, valid in `waiting`
+  replay: () => void // host only, valid in `ended` — resets the room to `waiting`
   input: (payload: InputPayload) => void
   fire: (payload: FirePayload) => void
 }
@@ -273,7 +274,7 @@ Each step lands in its own commit. Each step is demoable in isolation.
 | 5   | **Movement sync** — `input` event handler stores per-socket input. Tick loop applies walk/run each frame and broadcasts `state` at 30 Hz. Client emits `input` on diff and reconciles entities from `state`.                                                                   | Hold Space in tab 1 → tab 2 sees that zombie walk forward in real time, smoothly enough to be playable         |
 | 6   | **Shoot + hit** — `fire` handler runs point-in-AABB on the server. Broadcasts `shot-fired` (always) and `player-killed` (on hit). Client renders `fireShot`/`bloodShot` and `BloodSplat` from these events; sets target's animation to `die`.                                  | Tab 1 shoots tab 2's zombie → both tabs show the death animation, tab 2 stops moving                           |
 | 7   | **Win + EndScene** — server detects arrival-line crossing, transitions to `ended`, broadcasts `game-ended`. Both clients transition to `EndScene` with the right won/lost outcome.                                                                                             | First zombie to cross → both tabs land on EndScene simultaneously, winner sees "Gagné", others see "Perdu"     |
-| 8   | **Disconnect + replay** — disconnect during `running` removes the player and broadcasts `player-left`; client removes the entity. Replay button on `EndScene` (host only) emits a `start`-like event that resets to `waiting`.                                                 | Close tab 1 mid-game → tab 2 sees the zombie disappear; from EndScene, replay returns everyone to lobby        |
+| 8   | **Disconnect + replay** — disconnect during `running` removes the player and broadcasts `player-left`; client removes the entity. Replay button on `EndScene` (host only) emits `replay`, server resets the room to `waiting` and broadcasts a fresh `lobby-state`.            | Close tab 1 mid-game → tab 2 sees the zombie disappear; from EndScene, replay returns everyone to lobby        |
 
 ## Testing strategy
 
