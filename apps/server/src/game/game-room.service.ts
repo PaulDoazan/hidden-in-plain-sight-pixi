@@ -19,6 +19,8 @@ import {
   WORLD_WIDTH,
 } from '@hips/shared'
 
+import { findNearestHit } from './collision'
+
 const TYPES: ZombieType[] = ['man', 'woman', 'wild']
 const BULLETS_PER_PLAYER = 1
 
@@ -106,6 +108,33 @@ export class GameRoomService {
     if (p) {
       p.isAlive = false
       p.animation = 'die'
+    }
+  }
+
+  fire(
+    shooterId: string,
+    pointer: { x: number; y: number },
+  ): {
+    shooterId: string
+    origin: { x: number; y: number }
+    hit: { targetId: string } | null
+  } | null {
+    if (this.status !== 'running') return null
+    const shooter = this.players.get(shooterId)
+    if (!shooter || !shooter.isAlive || shooter.bulletsRemaining <= 0) return null
+
+    shooter.bulletsRemaining -= 1
+
+    const candidates = [...this.players.values()].filter((p) => p.id !== shooterId)
+    const hit = findNearestHit(pointer, candidates)
+    if (hit) {
+      hit.isAlive = false
+      hit.animation = 'die'
+    }
+    return {
+      shooterId,
+      origin: pointer,
+      hit: hit ? { targetId: hit.id } : null,
     }
   }
 

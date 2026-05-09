@@ -151,3 +151,53 @@ describe('GameRoomService — movement', () => {
     expect(room.snapshotState().players[0]!.x).toBe(before)
   })
 })
+
+describe('GameRoomService — fire', () => {
+  let room: GameRoomService
+
+  beforeEach(() => {
+    room = new GameRoomService()
+    room.addPlayer('a')
+    room.addPlayer('b')
+    room.start('a')
+  })
+
+  it('returns a miss when the pointer hits no one', () => {
+    const a = room.snapshotState().players.find((p) => p.id === 'a')!
+    const result = room.fire('a', { x: a.x + 1000, y: a.y + 1000 })
+    expect(result).toEqual({
+      shooterId: 'a',
+      origin: { x: a.x + 1000, y: a.y + 1000 },
+      hit: null,
+    })
+  })
+
+  it('marks the target dead on a hit and decrements the bullet', () => {
+    const b = room.snapshotState().players.find((p) => p.id === 'b')!
+    const result = room.fire('a', { x: b.x, y: b.y - 10 })
+    expect(result!.hit).toEqual({ targetId: 'b' })
+    const after = room.snapshotState()
+    expect(after.players.find((p) => p.id === 'b')!.isAlive).toBe(false)
+    expect(after.players.find((p) => p.id === 'b')!.animation).toBe('die')
+    expect(after.players.find((p) => p.id === 'a')!.bulletsRemaining).toBe(0)
+  })
+
+  it('refuses to shoot oneself', () => {
+    const a = room.snapshotState().players.find((p) => p.id === 'a')!
+    const result = room.fire('a', { x: a.x, y: a.y - 10 })
+    expect(result!.hit).toBeNull()
+  })
+
+  it('refuses to fire when no bullets remain', () => {
+    const b = room.snapshotState().players.find((p) => p.id === 'b')!
+    room.fire('a', { x: b.x, y: b.y - 10 }) // burns the only bullet
+    const second = room.fire('a', { x: b.x, y: b.y - 10 })
+    expect(second).toBeNull()
+  })
+
+  it('refuses to fire when the shooter is dead', () => {
+    room.killForTest('a')
+    const b = room.snapshotState().players.find((p) => p.id === 'b')!
+    expect(room.fire('a', { x: b.x, y: b.y - 10 })).toBeNull()
+  })
+})

@@ -3,7 +3,9 @@ import type {
   GameStartedPayload,
   InputPayload,
   LobbyStatePayload,
+  PlayerKilledPayload,
   PlayerState,
+  ShotFiredPayload,
   StatePayload,
   ZombieAnimation,
   ZombieType,
@@ -12,7 +14,9 @@ import type {
 import type { Game } from '../app/Game'
 import { ARRIVAL_LINE_TOP_Y } from '../config/gameConfig'
 import { ZOMBIE_SPRITES } from '../config/manifest'
+import { BloodSplat } from '../entities/BloodSplat'
 import { Crosshair } from '../entities/Crosshair'
+import { FireShot } from '../entities/FireShot'
 import { PlayerZombie } from '../entities/PlayerZombie'
 import { WaitingRoomOverlay } from '../ui/WaitingRoomOverlay'
 
@@ -27,6 +31,8 @@ export class GameScene extends Scene {
   private lobbyHandler: ((payload: LobbyStatePayload) => void) | null = null
   private gameStartedHandler: ((payload: GameStartedPayload) => void) | null = null
   private stateHandler: ((payload: StatePayload) => void) | null = null
+  private shotFiredHandler: ((payload: ShotFiredPayload) => void) | null = null
+  private playerKilledHandler: ((payload: PlayerKilledPayload) => void) | null = null
   private gameStarted = false
   private remoteZombies = new Map<string, PlayerZombie>()
   private arrivalLineX = 0
@@ -45,11 +51,15 @@ export class GameScene extends Scene {
     this.lobbyHandler = (payload) => this.applyLobby(payload)
     this.gameStartedHandler = (payload) => this.startGame(payload)
     this.stateHandler = (payload) => this.applyState(payload)
+    this.shotFiredHandler = (payload) => this.onShotFired(payload)
+    this.playerKilledHandler = (payload) => this.onPlayerKilled(payload)
 
     this.game.net.connect()
     this.game.net.on('lobby-state', this.lobbyHandler)
     this.game.net.on('game-started', this.gameStartedHandler)
     this.game.net.on('state', this.stateHandler)
+    this.game.net.on('shot-fired', this.shotFiredHandler)
+    this.game.net.on('player-killed', this.playerKilledHandler)
   }
 
   onExit(): void {
@@ -67,6 +77,14 @@ export class GameScene extends Scene {
       this.game.net.off('state', this.stateHandler)
       this.stateHandler = null
     }
+    if (this.shotFiredHandler) {
+      this.game.net.off('shot-fired', this.shotFiredHandler)
+      this.shotFiredHandler = null
+    }
+    if (this.playerKilledHandler) {
+      this.game.net.off('player-killed', this.playerKilledHandler)
+      this.playerKilledHandler = null
+    }
   }
 
   update(_delta: number): void {
@@ -79,7 +97,22 @@ export class GameScene extends Scene {
 
     this.maybeEmitInput()
 
+    if (this.game.input.consumeFire()) {
+      this.game.net.emit('fire', { pointer: { ...this.worldPointer } })
+    }
+
     for (const z of this.remoteZombies.values()) z.zIndex = z.y
+  }
+
+  private onShotFired(payload: ShotFiredPayload): void {
+    const fx = payload.hit ? new BloodSplat(this.game.assets) : new FireShot(this.game.assets)
+    fx.position.set(payload.origin.x, payload.origin.y)
+    this.gameLayer.addChild(fx)
+  }
+
+  private onPlayerKilled(payload: PlayerKilledPayload): void {
+    const z = this.remoteZombies.get(payload.id)
+    if (z) z.die()
   }
 
   private maybeEmitInput(): void {

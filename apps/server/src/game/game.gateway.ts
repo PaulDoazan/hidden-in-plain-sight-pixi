@@ -8,7 +8,12 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets'
-import type { ClientToServerEvents, InputPayload, ServerToClientEvents } from '@hips/shared'
+import type {
+  ClientToServerEvents,
+  FirePayload,
+  InputPayload,
+  ServerToClientEvents,
+} from '@hips/shared'
 import { SERVER_TICK_HZ } from '@hips/shared'
 import type { Server, Socket } from 'socket.io'
 
@@ -55,6 +60,19 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: InputPayload,
   ): void {
     this.room.applyInput(socket.id, payload)
+  }
+
+  @SubscribeMessage('fire')
+  onFire(
+    @ConnectedSocket() socket: AppSocket,
+    @MessageBody() payload: FirePayload,
+  ): void {
+    const result = this.room.fire(socket.id, payload.pointer)
+    if (!result) return
+    this.server.emit('shot-fired', result)
+    if (result.hit) {
+      this.server.emit('player-killed', { id: result.hit.targetId })
+    }
   }
 
   private startTickLoop(): void {
