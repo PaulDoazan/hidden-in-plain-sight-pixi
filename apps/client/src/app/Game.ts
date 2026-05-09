@@ -4,6 +4,7 @@ import { ARRIVAL_LINE_MARGIN, WORLD_HEIGHT, WORLD_WIDTH } from '../config/gameCo
 import { AssetLoader } from '../systems/AssetLoader'
 import { InputManager } from '../systems/InputManager'
 import { Layout } from '../systems/Layout'
+import { NetworkManager } from '../systems/NetworkManager'
 
 import { SceneManager } from './SceneManager'
 
@@ -14,6 +15,7 @@ export class Game {
   readonly input: InputManager
   readonly assets: AssetLoader
   readonly layout: Layout
+  readonly net: NetworkManager
 
   constructor(pixi: Application) {
     this.pixi = pixi
@@ -28,6 +30,7 @@ export class Game {
       arrivalLineMargin: ARRIVAL_LINE_MARGIN,
     })
     this.layout.recompute(window)
+    this.net = new NetworkManager()
 
     pixi.ticker.add((ticker) => this.sceneManager.update(ticker.deltaTime))
 

@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@hips/shared": "workspace:*",
-    "pixi.js": "^8.5.0"
+    "pixi.js": "^8.5.0",
+    "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
