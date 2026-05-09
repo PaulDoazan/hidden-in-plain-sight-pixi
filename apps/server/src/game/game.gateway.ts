@@ -79,8 +79,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (this.tickHandle) return
     const intervalMs = 1000 / SERVER_TICK_HZ
     this.tickHandle = setInterval(() => {
-      this.room.tick()
+      const winner = this.room.tickAndCheckWinner()
       this.server.emit('state', this.room.snapshotState())
+      if (winner) {
+        this.stopTickLoop()
+        this.server.emit('game-ended', winner)
+        this.broadcastLobby()
+      }
     }, intervalMs)
   }
 

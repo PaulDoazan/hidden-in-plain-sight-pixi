@@ -1,5 +1,6 @@
 import { Container, Graphics, Sprite } from 'pixi.js'
 import type {
+  GameEndedPayload,
   GameStartedPayload,
   InputPayload,
   LobbyStatePayload,
@@ -20,6 +21,7 @@ import { FireShot } from '../entities/FireShot'
 import { PlayerZombie } from '../entities/PlayerZombie'
 import { WaitingRoomOverlay } from '../ui/WaitingRoomOverlay'
 
+import { EndScene } from './EndScene'
 import { Scene } from './Scene'
 
 export class GameScene extends Scene {
@@ -33,6 +35,7 @@ export class GameScene extends Scene {
   private stateHandler: ((payload: StatePayload) => void) | null = null
   private shotFiredHandler: ((payload: ShotFiredPayload) => void) | null = null
   private playerKilledHandler: ((payload: PlayerKilledPayload) => void) | null = null
+  private gameEndedHandler: ((payload: GameEndedPayload) => void) | null = null
   private gameStarted = false
   private remoteZombies = new Map<string, PlayerZombie>()
   private arrivalLineX = 0
@@ -53,6 +56,7 @@ export class GameScene extends Scene {
     this.stateHandler = (payload) => this.applyState(payload)
     this.shotFiredHandler = (payload) => this.onShotFired(payload)
     this.playerKilledHandler = (payload) => this.onPlayerKilled(payload)
+    this.gameEndedHandler = (payload) => this.onGameEnded(payload)
 
     this.game.net.connect()
     this.game.net.on('lobby-state', this.lobbyHandler)
@@ -60,6 +64,7 @@ export class GameScene extends Scene {
     this.game.net.on('state', this.stateHandler)
     this.game.net.on('shot-fired', this.shotFiredHandler)
     this.game.net.on('player-killed', this.playerKilledHandler)
+    this.game.net.on('game-ended', this.gameEndedHandler)
   }
 
   onExit(): void {
@@ -84,6 +89,10 @@ export class GameScene extends Scene {
     if (this.playerKilledHandler) {
       this.game.net.off('player-killed', this.playerKilledHandler)
       this.playerKilledHandler = null
+    }
+    if (this.gameEndedHandler) {
+      this.game.net.off('game-ended', this.gameEndedHandler)
+      this.gameEndedHandler = null
     }
   }
 
@@ -113,6 +122,11 @@ export class GameScene extends Scene {
   private onPlayerKilled(payload: PlayerKilledPayload): void {
     const z = this.remoteZombies.get(payload.id)
     if (z) z.die()
+  }
+
+  private onGameEnded(payload: GameEndedPayload): void {
+    const won = payload.winnerId === this.game.net.id
+    void this.game.sceneManager.goTo(new EndScene(this.game), { won })
   }
 
   private maybeEmitInput(): void {

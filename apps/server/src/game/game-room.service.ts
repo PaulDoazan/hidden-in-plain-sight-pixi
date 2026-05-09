@@ -101,6 +101,25 @@ export class GameRoomService {
     return { players: [...this.players.values()].map((p) => ({ ...p })) }
   }
 
+  // Convenience method: tick + arrival-line check, used by the gateway loop.
+  tickAndCheckWinner(): { winnerId: string } | null {
+    if (this.status !== 'running') return null
+    this.tick()
+    for (const p of this.players.values()) {
+      if (p.isAlive && p.x >= ARRIVAL_LINE_X) {
+        this.status = 'ended'
+        return { winnerId: p.id }
+      }
+    }
+    return null
+  }
+
+  // Test-only helper.
+  teleportForTest(id: string, x: number): void {
+    const p = this.players.get(id)
+    if (p) p.x = x
+  }
+
   // Test-only helper to flip a player to dead without going through the
   // full fire/hit pipeline (which is exercised in the collision tests).
   killForTest(id: string): void {

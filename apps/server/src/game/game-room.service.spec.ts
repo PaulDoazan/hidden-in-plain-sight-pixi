@@ -1,4 +1,4 @@
-import { SERVER_TICK_HZ, WALK_SPEED, RUN_SPEED } from '@hips/shared'
+import { ARRIVAL_LINE_X, SERVER_TICK_HZ, WALK_SPEED, RUN_SPEED } from '@hips/shared'
 
 import { GameRoomService } from './game-room.service'
 
@@ -199,5 +199,34 @@ describe('GameRoomService — fire', () => {
     room.killForTest('a')
     const b = room.snapshotState().players.find((p) => p.id === 'b')!
     expect(room.fire('a', { x: b.x, y: b.y - 10 })).toBeNull()
+  })
+})
+
+describe('GameRoomService — win condition', () => {
+  let room: GameRoomService
+
+  beforeEach(() => {
+    room = new GameRoomService()
+    room.addPlayer('a')
+    room.addPlayer('b')
+    room.start('a')
+  })
+
+  it('returns null from tickAndCheckWinner while no one has crossed', () => {
+    expect(room.tickAndCheckWinner()).toBeNull()
+  })
+
+  it('declares the player who crosses the arrival line as winner', () => {
+    // Teleport 'a' just past the line so the next tick triggers the check.
+    room.teleportForTest('a', ARRIVAL_LINE_X + 1)
+    const winner = room.tickAndCheckWinner()
+    expect(winner).toEqual({ winnerId: 'a' })
+    expect(room.snapshotLobby().status).toBe('ended')
+  })
+
+  it('ignores dead players for the arrival check', () => {
+    room.killForTest('a')
+    room.teleportForTest('a', ARRIVAL_LINE_X + 1)
+    expect(room.tickAndCheckWinner()).toBeNull()
   })
 })
