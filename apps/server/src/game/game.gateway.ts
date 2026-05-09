@@ -1,7 +1,9 @@
 import { Logger } from '@nestjs/common'
 import {
+  ConnectedSocket,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets'
@@ -31,6 +33,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   handleDisconnect(socket: AppSocket): void {
     this.logger.log(`disconnected: ${socket.id}`)
     this.room.removePlayer(socket.id)
+    this.broadcastLobby()
+  }
+
+  @SubscribeMessage('start')
+  onStart(@ConnectedSocket() socket: AppSocket): void {
+    const result = this.room.start(socket.id)
+    if (!result) return
+    this.server.emit('game-started', result)
     this.broadcastLobby()
   }
 
