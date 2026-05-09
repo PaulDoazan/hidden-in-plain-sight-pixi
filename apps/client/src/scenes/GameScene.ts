@@ -22,7 +22,6 @@ export class GameScene extends Scene {
   private effectsLayer!: Container
   private crosshair!: Crosshair
   private waitingOverlay: WaitingRoomOverlay | null = null
-  private lastLobby: LobbyStatePayload = { players: [], status: 'waiting' }
   private lobbyHandler: ((payload: LobbyStatePayload) => void) | null = null
   private gameStarted = false
   private remoteZombies = new Map<string, PlayerZombie>()
@@ -107,7 +106,6 @@ export class GameScene extends Scene {
   }
 
   private applyLobby(payload: LobbyStatePayload): void {
-    this.lastLobby = payload
     if (!this.waitingOverlay) return
     const me = this.game.net.id
     const isHost = payload.players.some((p) => p.id === me && p.isHost)
@@ -166,8 +164,6 @@ export class GameScene extends Scene {
       textures: this.zombieTextures(state.type),
       frameCounts: this.zombieFrameCounts(state.type),
     })
-    zombie.x = state.x
-    zombie.y = state.y
     zombie.scale.set(this.game.layout.zombieScale)
     zombie.applyServerState(state)
     return zombie

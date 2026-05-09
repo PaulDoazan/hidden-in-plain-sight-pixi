@@ -12,7 +12,6 @@ export interface ZombieDeps {
 }
 
 export abstract class Zombie extends Container {
-  readonly id: string
   readonly type: ZombieType
   isAlive = true
   private current: ZombieAnimation | null = null
@@ -20,7 +19,6 @@ export abstract class Zombie extends Container {
 
   constructor(deps: ZombieDeps) {
     super()
-    this.id = `${deps.type}-${Math.random().toString(36).slice(2, 8)}`
     this.type = deps.type
 
     const animations: ZombieAnimation[] = ['walk', 'idle', 'die', 'run']

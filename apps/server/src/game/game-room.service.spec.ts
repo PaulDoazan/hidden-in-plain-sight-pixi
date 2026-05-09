@@ -86,4 +86,11 @@ describe('GameRoomService — start', () => {
     const result = room.start('a')!
     expect(result.players.map((p) => p.type)).toEqual(['man', 'woman', 'wild', 'man'])
   })
+
+  it('refuses a second start call once the room is running', () => {
+    room.addPlayer('a')
+    room.start('a')
+    expect(room.start('a')).toBeNull()
+    expect(room.snapshotLobby().status).toBe('running')
+  })
 })
