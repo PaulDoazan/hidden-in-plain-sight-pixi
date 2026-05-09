@@ -1,8 +1,10 @@
 import { Container, Graphics, Sprite } from 'pixi.js'
 import type {
   GameStartedPayload,
+  InputPayload,
   LobbyStatePayload,
   PlayerState,
+  StatePayload,
   ZombieAnimation,
   ZombieType,
 } from '@hips/shared'
@@ -23,10 +25,13 @@ export class GameScene extends Scene {
   private crosshair!: Crosshair
   private waitingOverlay: WaitingRoomOverlay | null = null
   private lobbyHandler: ((payload: LobbyStatePayload) => void) | null = null
+  private gameStartedHandler: ((payload: GameStartedPayload) => void) | null = null
+  private stateHandler: ((payload: StatePayload) => void) | null = null
   private gameStarted = false
   private remoteZombies = new Map<string, PlayerZombie>()
   private arrivalLineX = 0
-  private gameStartedHandler: ((payload: GameStartedPayload) => void) | null = null
+  private lastSentInput: InputPayload | null = null
+  private worldPointer = { x: 0, y: 0 }
 
   constructor(private readonly game: Game) {
     super()
@@ -39,10 +44,12 @@ export class GameScene extends Scene {
 
     this.lobbyHandler = (payload) => this.applyLobby(payload)
     this.gameStartedHandler = (payload) => this.startGame(payload)
+    this.stateHandler = (payload) => this.applyState(payload)
 
     this.game.net.connect()
     this.game.net.on('lobby-state', this.lobbyHandler)
     this.game.net.on('game-started', this.gameStartedHandler)
+    this.game.net.on('state', this.stateHandler)
   }
 
   onExit(): void {
@@ -56,14 +63,72 @@ export class GameScene extends Scene {
       this.game.net.off('game-started', this.gameStartedHandler)
       this.gameStartedHandler = null
     }
+    if (this.stateHandler) {
+      this.game.net.off('state', this.stateHandler)
+      this.stateHandler = null
+    }
   }
 
   update(_delta: number): void {
     if (!this.gameStarted) return
-    // Crosshair lives in screen space.
     this.crosshair.position.set(this.game.input.pointer.x, this.game.input.pointer.y)
-    // Depth sort by feet y.
+    this.worldPointer = this.gameLayer.toLocal({
+      x: this.crosshair.x,
+      y: this.crosshair.y,
+    })
+
+    this.maybeEmitInput()
+
     for (const z of this.remoteZombies.values()) z.zIndex = z.y
+  }
+
+  private maybeEmitInput(): void {
+    const next: InputPayload = {
+      keys: {
+        space: this.game.input.isDown(' '),
+        shift: this.game.input.isDown('Shift'),
+      },
+      pointer: { x: this.worldPointer.x, y: this.worldPointer.y },
+    }
+    if (this.shouldSend(next)) {
+      this.game.net.emit('input', next)
+      this.lastSentInput = next
+    }
+  }
+
+  private shouldSend(next: InputPayload): boolean {
+    const last = this.lastSentInput
+    if (!last) return true
+    if (last.keys.space !== next.keys.space) return true
+    if (last.keys.shift !== next.keys.shift) return true
+    // Throttle pointer updates: emit when it has moved by more than 4 world units.
+    const dx = last.pointer.x - next.pointer.x
+    const dy = last.pointer.y - next.pointer.y
+    return dx * dx + dy * dy > 16
+  }
+
+  private applyState(payload: StatePayload): void {
+    if (!this.gameStarted) return
+    const seen = new Set<string>()
+    for (const state of payload.players) {
+      seen.add(state.id)
+      const existing = this.remoteZombies.get(state.id)
+      if (existing) {
+        existing.applyServerState(state)
+      } else {
+        const z = this.makeZombie(state)
+        this.remoteZombies.set(state.id, z)
+        this.gameLayer.addChild(z)
+      }
+    }
+    // Remove entities that vanished from the snapshot (covered fully in Task 8;
+    // here it's a defensive pass so late-join recovery works correctly).
+    for (const [id, z] of this.remoteZombies) {
+      if (!seen.has(id)) {
+        z.destroy({ children: true })
+        this.remoteZombies.delete(id)
+      }
+    }
   }
 
   private buildLayers(): void {

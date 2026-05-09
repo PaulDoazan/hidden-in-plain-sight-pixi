@@ -1,3 +1,5 @@
+import { SERVER_TICK_HZ, WALK_SPEED, RUN_SPEED } from '@hips/shared'
+
 import { GameRoomService } from './game-room.service'
 
 describe('GameRoomService — lobby', () => {
@@ -92,5 +94,60 @@ describe('GameRoomService — start', () => {
     room.start('a')
     expect(room.start('a')).toBeNull()
     expect(room.snapshotLobby().status).toBe('running')
+  })
+})
+
+describe('GameRoomService — movement', () => {
+  let room: GameRoomService
+
+  beforeEach(() => {
+    room = new GameRoomService()
+    room.addPlayer('a')
+    room.start('a')
+  })
+
+  it('does not move a player whose space is not held', () => {
+    const before = room.snapshotState().players[0]!
+    room.tick()
+    const after = room.snapshotState().players[0]!
+    expect(after.x).toBe(before.x)
+    expect(after.animation).toBe('idle')
+  })
+
+  it('walks a player when space is held', () => {
+    room.applyInput('a', {
+      keys: { space: true, shift: false },
+      pointer: { x: 0, y: 0 },
+    })
+    const before = room.snapshotState().players[0]!.x
+    room.tick()
+    const after = room.snapshotState().players[0]!
+    expect(after.x).toBeCloseTo(before + WALK_SPEED * (60 / SERVER_TICK_HZ), 5)
+    expect(after.animation).toBe('walk')
+  })
+
+  it('runs a player when shift+space is held', () => {
+    room.applyInput('a', {
+      keys: { space: true, shift: true },
+      pointer: { x: 0, y: 0 },
+    })
+    const before = room.snapshotState().players[0]!.x
+    room.tick()
+    const after = room.snapshotState().players[0]!
+    expect(after.x).toBeCloseTo(before + RUN_SPEED * (60 / SERVER_TICK_HZ), 5)
+    expect(after.animation).toBe('run')
+  })
+
+  it('does not move a dead player', () => {
+    const id = 'a'
+    // Force-kill via internal state for this test.
+    room.killForTest(id)
+    room.applyInput(id, {
+      keys: { space: true, shift: false },
+      pointer: { x: 0, y: 0 },
+    })
+    const before = room.snapshotState().players[0]!.x
+    room.tick()
+    expect(room.snapshotState().players[0]!.x).toBe(before)
   })
 })

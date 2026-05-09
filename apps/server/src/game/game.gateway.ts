@@ -1,13 +1,15 @@
 import { Logger } from '@nestjs/common'
 import {
   ConnectedSocket,
+  MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets'
-import type { ClientToServerEvents, ServerToClientEvents } from '@hips/shared'
+import type { ClientToServerEvents, InputPayload, ServerToClientEvents } from '@hips/shared'
+import { SERVER_TICK_HZ } from '@hips/shared'
 import type { Server, Socket } from 'socket.io'
 
 import { GameRoomService } from './game-room.service'
@@ -21,6 +23,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @WebSocketServer()
   private readonly server!: AppServer
+
+  private tickHandle: ReturnType<typeof setInterval> | null = null
 
   constructor(private readonly room: GameRoomService) {}
 
@@ -42,6 +46,30 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!result) return
     this.server.emit('game-started', result)
     this.broadcastLobby()
+    this.startTickLoop()
+  }
+
+  @SubscribeMessage('input')
+  onInput(
+    @ConnectedSocket() socket: AppSocket,
+    @MessageBody() payload: InputPayload,
+  ): void {
+    this.room.applyInput(socket.id, payload)
+  }
+
+  private startTickLoop(): void {
+    if (this.tickHandle) return
+    const intervalMs = 1000 / SERVER_TICK_HZ
+    this.tickHandle = setInterval(() => {
+      this.room.tick()
+      this.server.emit('state', this.room.snapshotState())
+    }, intervalMs)
+  }
+
+  private stopTickLoop(): void {
+    if (!this.tickHandle) return
+    clearInterval(this.tickHandle)
+    this.tickHandle = null
   }
 
   private broadcastLobby(): void {

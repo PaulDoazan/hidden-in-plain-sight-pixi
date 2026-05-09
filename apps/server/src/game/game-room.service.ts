@@ -1,16 +1,22 @@
 import { Injectable } from '@nestjs/common'
 import type {
   GameStartedPayload,
+  InputPayload,
   LobbyStatePayload,
   PlayerState,
   RoomStatus,
+  StatePayload,
   ZombieType,
 } from '@hips/shared'
 import {
   ARRIVAL_LINE_X,
+  RUN_SPEED,
+  SERVER_TICK_HZ,
   SPAWN_BAND_WIDTH,
   SPAWN_BAND_X,
+  WALK_SPEED,
   WORLD_HEIGHT,
+  WORLD_WIDTH,
 } from '@hips/shared'
 
 const TYPES: ZombieType[] = ['man', 'woman', 'wild']
@@ -20,7 +26,9 @@ const BULLETS_PER_PLAYER = 1
 export class GameRoomService {
   private readonly playerOrder: string[] = []
   private readonly players = new Map<string, PlayerState>()
+  private readonly inputs = new Map<string, InputPayload>()
   private status: RoomStatus = 'waiting'
+  private static readonly TICK_SCALE = 60 / SERVER_TICK_HZ
 
   addPlayer(id: string): void {
     if (this.playerOrder.includes(id)) return
@@ -31,6 +39,7 @@ export class GameRoomService {
     const idx = this.playerOrder.indexOf(id)
     if (idx >= 0) this.playerOrder.splice(idx, 1)
     this.players.delete(id)
+    this.inputs.delete(id)
   }
 
   snapshotLobby(): LobbyStatePayload {
@@ -53,6 +62,50 @@ export class GameRoomService {
     return {
       players: [...this.players.values()],
       arrivalLineX: ARRIVAL_LINE_X,
+    }
+  }
+
+  applyInput(id: string, input: InputPayload): void {
+    if (!this.players.has(id)) return
+    this.inputs.set(id, input)
+  }
+
+  tick(): void {
+    if (this.status !== 'running') return
+    for (const player of this.players.values()) {
+      if (!player.isAlive) {
+        player.animation = 'die'
+        continue
+      }
+      const input = this.inputs.get(player.id)
+      const space = input?.keys.space ?? false
+      const shift = input?.keys.shift ?? false
+      if (space && shift) {
+        player.animation = 'run'
+        player.x += RUN_SPEED * GameRoomService.TICK_SCALE
+      } else if (space) {
+        player.animation = 'walk'
+        player.x += WALK_SPEED * GameRoomService.TICK_SCALE
+      } else {
+        player.animation = 'idle'
+      }
+      // Clamp to play area on x; y is fixed (no vertical movement in MVP).
+      if (player.x < 0) player.x = 0
+      if (player.x > WORLD_WIDTH) player.x = WORLD_WIDTH
+    }
+  }
+
+  snapshotState(): StatePayload {
+    return { players: [...this.players.values()].map((p) => ({ ...p })) }
+  }
+
+  // Test-only helper to flip a player to dead without going through the
+  // full fire/hit pipeline (which is exercised in the collision tests).
+  killForTest(id: string): void {
+    const p = this.players.get(id)
+    if (p) {
+      p.isAlive = false
+      p.animation = 'die'
     }
   }
 
