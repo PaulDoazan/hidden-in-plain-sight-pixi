@@ -43,6 +43,22 @@ export default [
     },
   },
   {
+    files: ['**/*.spec.ts', '**/*.test.ts'],
+    languageOptions: {
+      globals: {
+        describe: 'readonly',
+        it: 'readonly',
+        test: 'readonly',
+        expect: 'readonly',
+        beforeEach: 'readonly',
+        afterEach: 'readonly',
+        beforeAll: 'readonly',
+        afterAll: 'readonly',
+        jest: 'readonly',
+      },
+    },
+  },
+  {
     ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '**/.vite/**'],
   },
   prettierConfig,

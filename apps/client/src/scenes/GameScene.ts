@@ -1,5 +1,5 @@
 import { Container, Graphics, Sprite, Text } from 'pixi.js'
-import type { ZombieAnimation, ZombieType } from '@hips/shared'
+import type { LobbyStatePayload, ZombieAnimation, ZombieType } from '@hips/shared'
 import { SPAWN_BAND_WIDTH, SPAWN_BAND_X } from '@hips/shared'
 
 import type { Game } from '../app/Game'
@@ -15,12 +15,12 @@ import { fire } from '../entities/Bullet'
 import { Crosshair } from '../entities/Crosshair'
 import { PlayerZombie } from '../entities/PlayerZombie'
 import type { Zombie } from '../entities/Zombie'
+import { WaitingRoomOverlay } from '../ui/WaitingRoomOverlay'
 
 import { EndScene } from './EndScene'
 import { Scene } from './Scene'
 
 const TYPES: ZombieType[] = ['man', 'woman', 'wild']
-
 
 export class GameScene extends Scene {
   private bgLayer!: Container
@@ -32,6 +32,8 @@ export class GameScene extends Scene {
   private bulletsRemaining = defaultGameConfig.bulletsPerPlayer
   private won = false
   private hud!: Text
+  private waitingOverlay: WaitingRoomOverlay | null = null
+  private lastLobby: LobbyStatePayload = { players: [], status: 'waiting' }
 
   constructor(private readonly game: Game) {
     super()
@@ -40,20 +42,23 @@ export class GameScene extends Scene {
   onEnter(): void {
     this.buildLayers()
     this.buildBackground()
-    this.spawnBots()
-    this.spawnPlayer()
-    this.spawnCrosshair()
-    this.drawArrivalLine()
-    this.buildHud()
-    // Drain any stale fire flag set by the click that triggered the scene transition
-    // (e.g. clicking the "Jouer" button on HomeScene → LoadingScene → here). Without
-    // this, the very first update consumes that click and burns the only bullet.
-    this.game.input.consumeFire()
+    this.showWaitingOverlay()
+
+    this.game.net.connect()
+    this.game.net.on('lobby-state', (payload) => this.applyLobby(payload))
   }
 
-  onExit(): void {}
+  onExit(): void {
+    this.waitingOverlay?.destroy({ children: true })
+    this.waitingOverlay = null
+    this.game.net.off('lobby-state')
+  }
 
   update(_delta: number): void {
+    // Sandbox path is gated by the overlay being dismissed (Task 4 wires that).
+    // While the overlay is up, do nothing — entities aren't spawned yet.
+    if (this.waitingOverlay) return
+
     this.bots.forEach((b) => b.update(_delta))
     this.playerZombie.update(_delta)
 
@@ -217,5 +222,28 @@ export class GameScene extends Scene {
       result[a] = meta.frameCount
     }
     return result
+  }
+
+  private showWaitingOverlay(): void {
+    const { canvasWidth, canvasHeight } = this.game.layout
+    this.waitingOverlay = new WaitingRoomOverlay({
+      width: canvasWidth,
+      height: canvasHeight,
+      playerCount: 0,
+      isHost: false,
+      onStart: () => {
+        // Wired in Task 4 — emit('start') here.
+      },
+    })
+    this.addChild(this.waitingOverlay)
+  }
+
+  private applyLobby(payload: LobbyStatePayload): void {
+    this.lastLobby = payload
+    if (!this.waitingOverlay) return
+    const me = this.game.net.id
+    const isHost = payload.players.some((p) => p.id === me && p.isHost)
+    this.waitingOverlay.setPlayerCount(payload.players.length)
+    this.waitingOverlay.setHost(isHost)
   }
 }

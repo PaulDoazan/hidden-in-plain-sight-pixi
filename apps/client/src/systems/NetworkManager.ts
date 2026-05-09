@@ -22,6 +22,34 @@ export class NetworkManager {
     })
   }
 
+  on<E extends keyof ServerToClientEvents>(
+    event: E,
+    handler: ServerToClientEvents[E],
+  ): void {
+    if (!this.socket)
+      throw new Error(`NetworkManager.on('${String(event)}') called before connect()`)
+    // socket.io-client's typed `on` accepts the matching handler signature.
+    this.socket.on(event, handler as never)
+  }
+
+  off<E extends keyof ServerToClientEvents>(event: E): void {
+    this.socket?.removeAllListeners(event)
+  }
+
+  emit<E extends keyof ClientToServerEvents>(
+    event: E,
+    ...args: Parameters<ClientToServerEvents[E]>
+  ): void {
+    if (!this.socket)
+      throw new Error(`NetworkManager.emit('${String(event)}') called before connect()`)
+    // Cast through unknown to avoid socket.io-client's internal overload complexity.
+    ;(this.socket.emit as (e: string, ...a: unknown[]) => void)(event as string, ...args)
+  }
+
+  get id(): string | undefined {
+    return this.socket?.id
+  }
+
   get raw(): AppSocket | null {
     return this.socket
   }

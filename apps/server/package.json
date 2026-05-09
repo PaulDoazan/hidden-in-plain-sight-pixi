@@ -25,8 +25,10 @@
   "devDependencies": {
     "@nestjs/cli": "^10.4.0",
     "@nestjs/schematics": "^10.2.0",
+    "@types/jest": "^30.0.0",
     "@types/node": "^22.0.0",
     "jest": "^29.7.0",
+    "ts-jest": "^29.4.9",
     "ts-loader": "^9.5.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.6.0"
@@ -39,6 +41,17 @@
     ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "transform": {
+      "^.+\\.ts$": [
+        "ts-jest",
+        {
+          "tsconfig": "<rootDir>/../tsconfig.json"
+        }
+      ]
+    },
+    "moduleNameMapper": {
+      "^@hips/shared$": "<rootDir>/../../../packages/shared/src/index.ts"
+    }
   }
 }
