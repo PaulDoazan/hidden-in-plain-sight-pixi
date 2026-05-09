@@ -1,4 +1,5 @@
 import { Text } from 'pixi.js'
+import type { LobbyStatePayload } from '@hips/shared'
 
 import type { Game } from '../app/Game'
 import { Button } from '../ui/Button'
@@ -13,6 +14,9 @@ export interface EndSceneParams {
 export class EndScene extends Scene {
   private message!: Text
   private elapsed = 0
+  private replayBtn: Button | null = null
+  private hint: Text | null = null
+  private lobbyHandler: ((payload: LobbyStatePayload) => void) | null = null
 
   constructor(private readonly game: Game) {
     super()
@@ -32,17 +36,17 @@ export class EndScene extends Scene {
     this.message.scale.set(0.4)
     this.addChild(this.message)
 
-    const replay = new Button({
-      label: 'Rejouer',
-      onClick: () => {
-        void this.game.sceneManager.goTo(new GameScene(this.game))
-      },
-    })
-    replay.position.set(canvasWidth / 2, canvasHeight / 2 + 60)
-    this.addChild(replay)
+    // Listen for the lobby reset that follows a successful replay.
+    this.lobbyHandler = (payload) => this.onLobbyState(payload)
+    this.game.net.on('lobby-state', this.lobbyHandler)
   }
 
-  onExit(): void {}
+  onExit(): void {
+    if (this.lobbyHandler) {
+      this.game.net.off('lobby-state', this.lobbyHandler)
+      this.lobbyHandler = null
+    }
+  }
 
   update(delta: number): void {
     if (this.elapsed >= 30) return
@@ -50,5 +54,43 @@ export class EndScene extends Scene {
     const t = Math.min(this.elapsed / 30, 1)
     this.message.alpha = t
     this.message.scale.set(0.4 + t * 0.6)
+  }
+
+  private onLobbyState(payload: LobbyStatePayload): void {
+    const { canvasWidth, canvasHeight } = this.game.layout
+    const me = this.game.net.id
+    const isHost = payload.players.some((p) => p.id === me && p.isHost)
+
+    if (payload.status === 'waiting') {
+      // Server reset the room — back to lobby for everyone. We pass the lobby
+      // payload as scene params so GameScene.onEnter can render the right
+      // count immediately, without racing against a fresh `lobby-state` event
+      // that may never come (everyone is already connected).
+      void this.game.sceneManager.goTo(new GameScene(this.game), {
+        initialLobby: payload,
+      })
+      return
+    }
+
+    // status === 'ended': show the right control depending on host.
+    if (this.replayBtn || this.hint) return
+    if (isHost) {
+      const btn = new Button({
+        label: 'Rejouer',
+        onClick: () => this.game.net.emit('replay'),
+      })
+      btn.position.set(canvasWidth / 2, canvasHeight / 2 + 60)
+      this.addChild(btn)
+      this.replayBtn = btn
+    } else {
+      const hint = new Text({
+        text: "En attente d'une nouvelle partie…",
+        style: { fill: 0xaaaaaa, fontSize: 18, fontFamily: 'Space Mono, monospace' },
+      })
+      hint.anchor.set(0.5)
+      hint.position.set(canvasWidth / 2, canvasHeight / 2 + 60)
+      this.addChild(hint)
+      this.hint = hint
+    }
   }
 }

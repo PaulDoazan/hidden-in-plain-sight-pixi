@@ -157,6 +157,15 @@ export class GameRoomService {
     }
   }
 
+  replay(requesterId: string): boolean {
+    if (this.status !== 'ended') return false
+    if (this.playerOrder[0] !== requesterId) return false
+    this.status = 'waiting'
+    this.players.clear()
+    this.inputs.clear()
+    return true
+  }
+
   private spawnPlayer(id: string, index: number): PlayerState {
     return {
       id,

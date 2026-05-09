@@ -42,6 +42,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   handleDisconnect(socket: AppSocket): void {
     this.logger.log(`disconnected: ${socket.id}`)
     this.room.removePlayer(socket.id)
+    this.server.emit('player-left', { id: socket.id })
     this.broadcastLobby()
   }
 
@@ -60,6 +61,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: InputPayload,
   ): void {
     this.room.applyInput(socket.id, payload)
+  }
+
+  @SubscribeMessage('replay')
+  onReplay(@ConnectedSocket() socket: AppSocket): void {
+    if (!this.room.replay(socket.id)) return
+    this.broadcastLobby()
   }
 
   @SubscribeMessage('fire')

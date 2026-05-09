@@ -5,6 +5,7 @@ import type {
   InputPayload,
   LobbyStatePayload,
   PlayerKilledPayload,
+  PlayerLeftPayload,
   PlayerState,
   ShotFiredPayload,
   StatePayload,
@@ -36,6 +37,7 @@ export class GameScene extends Scene {
   private shotFiredHandler: ((payload: ShotFiredPayload) => void) | null = null
   private playerKilledHandler: ((payload: PlayerKilledPayload) => void) | null = null
   private gameEndedHandler: ((payload: GameEndedPayload) => void) | null = null
+  private playerLeftHandler: ((payload: PlayerLeftPayload) => void) | null = null
   private gameStarted = false
   private remoteZombies = new Map<string, PlayerZombie>()
   private arrivalLineX = 0
@@ -46,7 +48,7 @@ export class GameScene extends Scene {
     super()
   }
 
-  onEnter(): void {
+  onEnter(params?: unknown): void {
     this.buildLayers()
     this.buildBackground()
     this.showWaitingOverlay()
@@ -57,6 +59,7 @@ export class GameScene extends Scene {
     this.shotFiredHandler = (payload) => this.onShotFired(payload)
     this.playerKilledHandler = (payload) => this.onPlayerKilled(payload)
     this.gameEndedHandler = (payload) => this.onGameEnded(payload)
+    this.playerLeftHandler = (payload) => this.onPlayerLeft(payload)
 
     this.game.net.connect()
     this.game.net.on('lobby-state', this.lobbyHandler)
@@ -65,6 +68,11 @@ export class GameScene extends Scene {
     this.game.net.on('shot-fired', this.shotFiredHandler)
     this.game.net.on('player-killed', this.playerKilledHandler)
     this.game.net.on('game-ended', this.gameEndedHandler)
+    this.game.net.on('player-left', this.playerLeftHandler)
+
+    const initial = (params as { initialLobby?: LobbyStatePayload } | undefined)
+      ?.initialLobby
+    if (initial) this.applyLobby(initial)
   }
 
   onExit(): void {
@@ -94,6 +102,10 @@ export class GameScene extends Scene {
       this.game.net.off('game-ended', this.gameEndedHandler)
       this.gameEndedHandler = null
     }
+    if (this.playerLeftHandler) {
+      this.game.net.off('player-left', this.playerLeftHandler)
+      this.playerLeftHandler = null
+    }
   }
 
   update(_delta: number): void {
@@ -122,6 +134,13 @@ export class GameScene extends Scene {
   private onPlayerKilled(payload: PlayerKilledPayload): void {
     const z = this.remoteZombies.get(payload.id)
     if (z) z.die()
+  }
+
+  private onPlayerLeft(payload: PlayerLeftPayload): void {
+    const z = this.remoteZombies.get(payload.id)
+    if (!z) return
+    z.destroy({ children: true })
+    this.remoteZombies.delete(payload.id)
   }
 
   private onGameEnded(payload: GameEndedPayload): void {

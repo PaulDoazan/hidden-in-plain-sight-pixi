@@ -230,3 +230,44 @@ describe('GameRoomService — win condition', () => {
     expect(room.tickAndCheckWinner()).toBeNull()
   })
 })
+
+describe('GameRoomService — disconnect during running', () => {
+  it('removes the player from the snapshot', () => {
+    const room = new GameRoomService()
+    room.addPlayer('a')
+    room.addPlayer('b')
+    room.start('a')
+    room.removePlayer('b')
+    const ids = room.snapshotState().players.map((p) => p.id)
+    expect(ids).toEqual(['a'])
+  })
+})
+
+describe('GameRoomService — replay', () => {
+  let room: GameRoomService
+
+  beforeEach(() => {
+    room = new GameRoomService()
+    room.addPlayer('a')
+    room.addPlayer('b')
+    room.start('a')
+    room.teleportForTest('a', 9999)
+    room.tickAndCheckWinner()
+  })
+
+  it('refuses replay from a non-host', () => {
+    expect(room.replay('b')).toBe(false)
+  })
+
+  it('refuses replay while not in ended state', () => {
+    const fresh = new GameRoomService()
+    fresh.addPlayer('a')
+    expect(fresh.replay('a')).toBe(false)
+  })
+
+  it('resets the room to waiting on host replay', () => {
+    expect(room.replay('a')).toBe(true)
+    expect(room.snapshotLobby().status).toBe('waiting')
+    expect(room.snapshotState().players).toHaveLength(0)
+  })
+})
