@@ -17,3 +17,6 @@ export interface ZombieState {
   animation: ZombieAnimation
   isAlive: boolean
 }
+
+export * from './world'
+export * from './events'

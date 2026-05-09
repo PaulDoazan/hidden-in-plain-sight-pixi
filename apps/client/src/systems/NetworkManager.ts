@@ -1,9 +1,15 @@
+import type {
+  ClientToServerEvents,
+  ServerToClientEvents,
+} from '@hips/shared'
 import { io, type Socket } from 'socket.io-client'
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? 'http://localhost:3000'
 
+type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>
+
 export class NetworkManager {
-  private socket: Socket | null = null
+  private socket: AppSocket | null = null
 
   connect(): void {
     if (this.socket) return
@@ -14,6 +20,10 @@ export class NetworkManager {
     this.socket.on('disconnect', (reason) => {
       console.log('[net] disconnected', reason)
     })
+  }
+
+  get raw(): AppSocket | null {
+    return this.socket
   }
 
   disconnect(): void {
