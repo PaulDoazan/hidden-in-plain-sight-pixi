@@ -8,9 +8,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter './apps/*' dev",
-    "dev:client": "pnpm --filter client dev",
-    "dev:server": "pnpm --filter server start:dev",
+    "dev": "pnpm --filter @hips/shared build && pnpm -r --parallel --filter '!.' run dev",
+    "dev:client": "pnpm --filter @hips/shared build && pnpm --filter client dev",
+    "dev:server": "pnpm --filter @hips/shared build && pnpm --filter server start:dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "lint:fix": "pnpm -r --parallel exec eslint src --fix",
