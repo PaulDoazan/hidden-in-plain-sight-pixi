@@ -259,6 +259,12 @@ export class GameScene extends Scene {
       this.gameLayer.addChild(zombie)
     }
 
+    // Drain any stale fire flag from the click that triggered Démarrer (or
+    // Replay). Without this, the first update() after gameStarted=true would
+    // consume that click and immediately emit('fire'), burning the host's
+    // only bullet on game-start.
+    this.game.input.consumeFire()
+
     this.gameStarted = true
   }
 
