@@ -241,6 +241,27 @@ describe('GameRoomService — disconnect during running', () => {
     const ids = room.snapshotState().players.map((p) => p.id)
     expect(ids).toEqual(['a'])
   })
+
+  it('resets the room to waiting when the last player leaves', () => {
+    const room = new GameRoomService()
+    room.addPlayer('a')
+    room.start('a')
+    expect(room.snapshotLobby().status).toBe('running')
+    room.removePlayer('a')
+    expect(room.snapshotLobby().status).toBe('waiting')
+    expect(room.isEmpty()).toBe(true)
+  })
+
+  it('resets the room to waiting after an ended game when everyone leaves', () => {
+    const room = new GameRoomService()
+    room.addPlayer('a')
+    room.start('a')
+    room.teleportForTest('a', 9999)
+    room.tickAndCheckWinner()
+    expect(room.snapshotLobby().status).toBe('ended')
+    room.removePlayer('a')
+    expect(room.snapshotLobby().status).toBe('waiting')
+  })
 })
 
 describe('GameRoomService — replay', () => {

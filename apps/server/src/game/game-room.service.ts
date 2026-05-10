@@ -42,6 +42,17 @@ export class GameRoomService {
     if (idx >= 0) this.playerOrder.splice(idx, 1)
     this.players.delete(id)
     this.inputs.delete(id)
+    // Empty room: drop any leftover game state so the next connection starts
+    // in a clean `waiting` lobby. Without this, refreshing the host while
+    // running/ended leaves the room stuck and the next Démarrer click is
+    // silently rejected by `start()` (status guard).
+    if (this.playerOrder.length === 0 && this.status !== 'waiting') {
+      this.status = 'waiting'
+    }
+  }
+
+  isEmpty(): boolean {
+    return this.playerOrder.length === 0
   }
 
   snapshotLobby(): LobbyStatePayload {

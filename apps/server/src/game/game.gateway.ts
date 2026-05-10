@@ -44,6 +44,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.room.removePlayer(socket.id)
     this.server.emit('player-left', { id: socket.id })
     this.broadcastLobby()
+    // Room emptied: tick loop has nothing to broadcast, stop it so the next
+    // `start` opens a fresh tick rather than racing the previous interval.
+    if (this.room.isEmpty()) this.stopTickLoop()
   }
 
   @SubscribeMessage('start')
