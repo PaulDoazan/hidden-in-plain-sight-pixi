@@ -1,6 +1,7 @@
 import { Container, Graphics, Text } from 'pixi.js'
 
 import { Button } from './Button'
+import { IconButton } from './IconButton'
 
 export interface WaitingRoomOverlayOptions {
   width: number
@@ -15,7 +16,7 @@ export class WaitingRoomOverlay extends Container {
   private readonly count: Text
   private startBtn: Button | null = null
   private hostHint: Text | null = null
-  private copyBtn: Button | null = null
+  private copyBtn: IconButton | null = null
   private copyResetTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly opts: WaitingRoomOverlayOptions) {
@@ -53,16 +54,19 @@ export class WaitingRoomOverlay extends Container {
         },
       })
       codeText.anchor.set(0.5)
-      codeText.position.set(opts.width / 2, opts.height / 2 - 60)
+      // Shift the code slightly left so the copy icon sits flush to its right.
+      codeText.position.set(opts.width / 2 - 24, opts.height / 2 - 60)
       this.addChild(codeText)
 
-      const copyBtn = new Button({
-        label: 'Copier le code',
-        width: 160,
-        height: 36,
+      const copyBtn = new IconButton({
+        size: 40,
+        initialIcon: 'copy',
         onClick: () => void this.copyCode(opts.code as string),
       })
-      copyBtn.position.set(opts.width / 2, opts.height / 2 - 15)
+      copyBtn.position.set(
+        opts.width / 2 - 24 + codeText.width / 2 + 32,
+        opts.height / 2 - 60,
+      )
       this.addChild(copyBtn)
       this.copyBtn = copyBtn
     }
@@ -72,7 +76,7 @@ export class WaitingRoomOverlay extends Container {
       style: { fill: 0xffffff, fontSize: 22, fontFamily: 'Space Mono, monospace' },
     })
     this.count.anchor.set(0.5)
-    this.count.position.set(opts.width / 2, opts.height / 2 + 30)
+    this.count.position.set(opts.width / 2, opts.height / 2 + 10)
     this.addChild(this.count)
 
     if (opts.isHost) this.addStartButton()
@@ -144,16 +148,16 @@ export class WaitingRoomOverlay extends Container {
     } catch {
       ok = false
     }
-    this.flashCopyLabel(ok ? 'Copié !' : 'Échec, copie-le à la main')
+    if (ok) this.flashCopySuccess()
   }
 
-  private flashCopyLabel(message: string): void {
+  private flashCopySuccess(): void {
     if (!this.copyBtn) return
     const btn = this.copyBtn
-    btn.setLabel(message)
+    btn.setIcon('check')
     if (this.copyResetTimer) clearTimeout(this.copyResetTimer)
     this.copyResetTimer = setTimeout(() => {
-      btn.setLabel('Copier le code')
+      btn.setIcon('copy')
       this.copyResetTimer = null
     }, 1500)
   }

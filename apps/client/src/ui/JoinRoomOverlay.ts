@@ -52,7 +52,7 @@ export class JoinRoomOverlay extends Container {
     this.input.autocomplete = 'off'
     this.input.spellcheck = false
     this.input.style.cssText = [
-      'position: absolute',
+      'position: fixed',
       `left: ${opts.width / 2 - 120}px`,
       `top: ${opts.height / 2 - 25}px`,
       'width: 240px',
@@ -67,6 +67,10 @@ export class JoinRoomOverlay extends Container {
       'border-radius: 8px',
       'outline: none',
       'caret-color: #fff700',
+      'z-index: 10',
+      'pointer-events: auto',
+      'user-select: text',
+      '-webkit-user-select: text',
     ].join('; ')
     this.input.addEventListener('keydown', this.onInputKey)
     this.input.addEventListener('input', this.onInputChange)
