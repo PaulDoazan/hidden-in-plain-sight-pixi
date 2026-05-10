@@ -198,10 +198,13 @@ describe('GameRoomService — fire', () => {
     expect(room.fire('a', { x: b.x, y: b.y - 10 })).toBeNull()
   })
 
-  it('refuses to fire when the shooter is dead', () => {
+  it('still lets a dead shooter fire (per game design)', () => {
     room.killForTest('a')
     const b = room.snapshotState().players.find((p) => p.id === 'b')!
-    expect(room.fire('a', { x: b.x, y: b.y - 10 })).toBeNull()
+    const result = room.fire('a', { x: b.x, y: b.y - 10 })
+    expect(result).not.toBeNull()
+    expect(result!.hit).toEqual({ targetId: 'b' })
+    expect(room.snapshotState().players.find((p) => p.id === 'b')!.isAlive).toBe(false)
   })
 })
 

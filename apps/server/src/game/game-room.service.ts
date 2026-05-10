@@ -161,7 +161,9 @@ export class GameRoomService {
   } | null {
     if (this.status !== 'running') return null
     const shooter = this.players.get(shooterId)
-    if (!shooter || !shooter.isAlive || shooter.bulletsRemaining <= 0) return null
+    // Note: dead shooters are intentionally allowed to fire — a player can
+    // still take revenge after being killed, per the original game design.
+    if (!shooter || shooter.bulletsRemaining <= 0) return null
 
     shooter.bulletsRemaining -= 1
 

@@ -120,7 +120,7 @@ export class GameScene extends Scene {
 
     this.maybeEmitInput()
 
-    if (this.game.input.consumeFire() && this.isAlive) {
+    if (this.game.input.consumeFire()) {
       console.log('[debug] firing at world', this.worldPointer)
       this.game.net.emit('fire', {
         pointer: { ...this.worldPointer },
