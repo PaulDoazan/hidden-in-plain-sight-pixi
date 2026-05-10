@@ -63,6 +63,11 @@ export interface PlayerState {
   animation: ZombieAnimation
   isAlive: boolean
   bulletsRemaining: number
+  // Per-player crosshair color, picked from a fixed palette at spawn time.
+  color: number
+  // World-space pointer position broadcast to all peers so each client can
+  // render every other player's crosshair.
+  pointer: { x: number; y: number }
 }
 
 export type RoomStatus = 'waiting' | 'running' | 'ended'

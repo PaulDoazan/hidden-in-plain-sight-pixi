@@ -40,6 +40,7 @@ export class GameScene extends Scene {
   private playerLeftHandler: ((payload: PlayerLeftPayload) => void) | null = null
   private gameStarted = false
   private remoteZombies = new Map<string, PlayerZombie>()
+  private remoteCrosshairs = new Map<string, Crosshair>()
   private arrivalLineX = 0
   private lastSentInput: InputPayload | null = null
   private worldPointer = { x: 0, y: 0 }
@@ -151,9 +152,15 @@ export class GameScene extends Scene {
 
   private onPlayerLeft(payload: PlayerLeftPayload): void {
     const z = this.remoteZombies.get(payload.id)
-    if (!z) return
-    z.destroy({ children: true })
-    this.remoteZombies.delete(payload.id)
+    if (z) {
+      z.destroy({ children: true })
+      this.remoteZombies.delete(payload.id)
+    }
+    const c = this.remoteCrosshairs.get(payload.id)
+    if (c) {
+      c.destroy({ children: true })
+      this.remoteCrosshairs.delete(payload.id)
+    }
   }
 
   private onGameEnded(payload: GameEndedPayload): void {
@@ -203,7 +210,13 @@ export class GameScene extends Scene {
         this.remoteZombies.set(state.id, z)
         this.gameLayer.addChild(z)
       }
-      if (state.id === me) this.refreshHud(state)
+      if (state.id === me) {
+        this.refreshHud(state)
+        // Sync the local crosshair color with the server-assigned palette.
+        this.crosshair.setColor(state.color)
+      } else {
+        this.syncRemoteCrosshair(state)
+      }
     }
     // Remove entities that vanished from the snapshot (covered fully in Task 8;
     // here it's a defensive pass so late-join recovery works correctly).
@@ -213,6 +226,35 @@ export class GameScene extends Scene {
         this.remoteZombies.delete(id)
       }
     }
+    for (const [id, c] of this.remoteCrosshairs) {
+      if (!seen.has(id)) {
+        c.destroy({ children: true })
+        this.remoteCrosshairs.delete(id)
+      }
+    }
+  }
+
+  private syncRemoteCrosshair(state: PlayerState): void {
+    let crosshair = this.remoteCrosshairs.get(state.id)
+    if (!crosshair) {
+      crosshair = new Crosshair(state.color)
+      // Remote crosshairs live in world space so their position matches what
+      // the shooter sees on their own screen. Scale them inversely to the
+      // gameLayer's scale so they stay the same on-screen size as the local
+      // (screen-space) crosshair regardless of viewport.
+      const inv = 1 / this.game.layout.worldScale
+      crosshair.scale.set(inv)
+      // A bit of transparency so remote crosshairs don't visually compete
+      // with the local one for the shooter's attention.
+      crosshair.alpha = 0.7
+      this.gameLayer.addChild(crosshair)
+      this.remoteCrosshairs.set(state.id, crosshair)
+    }
+    crosshair.setColor(state.color)
+    crosshair.position.set(state.pointer.x, state.pointer.y)
+    // Hide remote crosshairs for players that have already used their bullet
+    // — a spent shooter has no reason to keep visually aiming.
+    crosshair.visible = state.bulletsRemaining > 0
   }
 
   private buildLayers(): void {

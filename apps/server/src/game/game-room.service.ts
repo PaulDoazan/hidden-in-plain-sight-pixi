@@ -23,6 +23,25 @@ import { findNearestHit } from './collision'
 const TYPES: ZombieType[] = ['man', 'woman', 'wild']
 export const BULLETS_PER_PLAYER = 1
 
+// Fixed crosshair palette. Picked to be highly distinguishable on the dim
+// playfield: warm primaries first, then secondaries. Players are assigned
+// colors by spawn index, so a refresh keeps the same player on the same
+// color across the session.
+const CROSSHAIR_PALETTE: number[] = [
+  0xff5252, // red
+  0x40c4ff, // sky blue
+  0xb388ff, // violet
+  0x69f0ae, // mint
+  0xffd740, // amber
+  0xff80ab, // pink
+  0x84ffff, // cyan
+  0xeeff41, // lime
+  0xff9100, // orange
+  0xb9f6ca, // pale green
+  0xea80fc, // magenta
+  0xffffff, // white (fallback for the 12th+ player)
+]
+
 // Per-room state. Owned and instantiated by RoomRegistry; not a Nest provider.
 export class GameRoomService {
   private readonly playerOrder: string[] = []
@@ -78,8 +97,12 @@ export class GameRoomService {
   }
 
   applyInput(id: string, input: InputPayload): void {
-    if (!this.players.has(id)) return
+    const player = this.players.get(id)
+    if (!player) return
     this.inputs.set(id, input)
+    // Pointer is surfaced on the player so every snapshot carries the
+    // up-to-date crosshair position for remote rendering.
+    player.pointer = input.pointer
   }
 
   tick(): void {
@@ -187,15 +210,21 @@ export class GameRoomService {
   }
 
   private spawnPlayer(id: string, index: number): PlayerState {
+    const x = SPAWN_BAND_X + Math.random() * SPAWN_BAND_WIDTH
+    const y = WORLD_HEIGHT * (0.3 + ((index * 0.13) % 0.6)) + 100
     return {
       id,
       type: TYPES[index % TYPES.length]!,
-      x: SPAWN_BAND_X + Math.random() * SPAWN_BAND_WIDTH,
+      x,
       // Stagger Y so two players don't perfectly overlap on spawn.
-      y: WORLD_HEIGHT * (0.3 + ((index * 0.13) % 0.6)) + 100,
+      y,
       animation: 'idle',
       isAlive: true,
       bulletsRemaining: BULLETS_PER_PLAYER,
+      color: CROSSHAIR_PALETTE[index % CROSSHAIR_PALETTE.length]!,
+      // Initial pointer position colocated with the player so before the
+      // first input event there's still a valid crosshair to render.
+      pointer: { x, y: y - 60 },
     }
   }
 }
