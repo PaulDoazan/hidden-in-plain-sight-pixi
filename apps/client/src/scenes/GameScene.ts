@@ -323,7 +323,11 @@ export class GameScene extends Scene {
       textures: this.zombieTextures(state.type),
       frameCounts: this.zombieFrameCounts(state.type),
     })
-    zombie.scale.set(this.game.layout.zombieScale)
+    // Keep the zombie at scale 1: its hitbox lives in world coordinates and
+    // must match the server's authoritative AABB (which knows nothing about
+    // the per-client `zombieScale` boost). On small viewports this means
+    // sprites render smaller — acceptable for MVP. Mobile-friendly scaling
+    // belongs in Phase 3 where the server protocol can carry per-spawn size.
     zombie.applyServerState(state)
     return zombie
   }
