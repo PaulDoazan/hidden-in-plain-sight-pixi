@@ -44,6 +44,7 @@ export class GameScene extends Scene {
   private lastSentInput: InputPayload | null = null
   private worldPointer = { x: 0, y: 0 }
   private hud: Text | null = null
+  private isAlive = true
 
   constructor(private readonly game: Game) {
     super()
@@ -119,7 +120,7 @@ export class GameScene extends Scene {
 
     this.maybeEmitInput()
 
-    if (this.game.input.consumeFire()) {
+    if (this.game.input.consumeFire() && this.isAlive) {
       console.log('[debug] firing at world', this.worldPointer)
       this.game.net.emit('fire', {
         pointer: { ...this.worldPointer },
@@ -139,6 +140,10 @@ export class GameScene extends Scene {
   private onPlayerKilled(payload: PlayerKilledPayload): void {
     const z = this.remoteZombies.get(payload.id)
     if (z) z.die()
+    // Update local alive flag immediately rather than waiting for the next
+    // state snapshot — without this, a quick double-click could squeeze a
+    // fire emit between the kill event and the snapshot that flips isAlive.
+    if (payload.id === this.game.net.id) this.isAlive = false
   }
 
   private onPlayerLeft(payload: PlayerLeftPayload): void {
@@ -288,6 +293,7 @@ export class GameScene extends Scene {
   }
 
   private refreshHud(state: PlayerState): void {
+    this.isAlive = state.isAlive
     if (!this.hud) return
     const alive = state.isAlive ? '' : ' (mort)'
     this.hud.text = `Balles : ${state.bulletsRemaining}${alive}`
