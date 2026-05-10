@@ -121,7 +121,10 @@ export class GameScene extends Scene {
 
     if (this.game.input.consumeFire()) {
       console.log('[debug] firing at world', this.worldPointer)
-      this.game.net.emit('fire', { pointer: { ...this.worldPointer } })
+      this.game.net.emit('fire', {
+        pointer: { ...this.worldPointer },
+        scale: this.game.layout.zombieScale,
+      })
     }
 
     for (const z of this.remoteZombies.values()) z.zIndex = z.y
@@ -323,11 +326,7 @@ export class GameScene extends Scene {
       textures: this.zombieTextures(state.type),
       frameCounts: this.zombieFrameCounts(state.type),
     })
-    // Keep the zombie at scale 1: its hitbox lives in world coordinates and
-    // must match the server's authoritative AABB (which knows nothing about
-    // the per-client `zombieScale` boost). On small viewports this means
-    // sprites render smaller — acceptable for MVP. Mobile-friendly scaling
-    // belongs in Phase 3 where the server protocol can carry per-spawn size.
+    zombie.scale.set(this.game.layout.zombieScale)
     zombie.applyServerState(state)
     return zombie
   }

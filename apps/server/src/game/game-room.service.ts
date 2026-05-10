@@ -153,6 +153,7 @@ export class GameRoomService {
   fire(
     shooterId: string,
     pointer: { x: number; y: number },
+    scale = 1,
   ): {
     shooterId: string
     origin: { x: number; y: number }
@@ -165,7 +166,7 @@ export class GameRoomService {
     shooter.bulletsRemaining -= 1
 
     const candidates = [...this.players.values()].filter((p) => p.id !== shooterId)
-    const hit = findNearestHit(pointer, candidates)
+    const hit = findNearestHit(pointer, candidates, scale)
     if (hit) {
       hit.isAlive = false
       hit.animation = 'die'

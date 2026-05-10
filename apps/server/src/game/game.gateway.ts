@@ -77,7 +77,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() socket: AppSocket,
     @MessageBody() payload: FirePayload,
   ): void {
-    const result = this.room.fire(socket.id, payload.pointer)
+    const result = this.room.fire(socket.id, payload.pointer, payload.scale)
     if (!result) return
     this.server.emit('shot-fired', result)
     if (result.hit) {

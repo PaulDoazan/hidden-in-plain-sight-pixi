@@ -74,6 +74,10 @@ export interface InputPayload {
 
 export interface FirePayload {
   pointer: { x: number; y: number } // world coordinates
+  // Per-client zombie hitbox scale. The server multiplies its base AABB by
+  // this factor so a hit registered visually on the shooter's screen also
+  // counts on the server (which doesn't know per-viewport rendering scale).
+  scale: number
 }
 
 export interface LobbyStatePayload {

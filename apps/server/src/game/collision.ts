@@ -31,23 +31,31 @@ export function isPointInAABB(point: Point, box: ServerAABB): boolean {
   )
 }
 
-export function aabbFor(target: CollidableTarget): ServerAABB {
+export function aabbFor(target: CollidableTarget, scale = 1): ServerAABB {
   // Mirror Zombie.aabb on the client: anchor (0.5, 1.0), so the box hangs
-  // upward from feet.
+  // upward from feet. `scale` matches the per-client `zombieScale` boost the
+  // shooter applies to its rendered sprites — without it, the server's
+  // hitbox is smaller than what the shooter saw and clicks on the visible
+  // sprite are silently rejected.
   const box = ZOMBIE_BODY_BOX[target.type]
+  const w = box.width * scale
+  const h = box.height * scale
   return {
-    x: target.x - box.width / 2,
-    y: target.y - box.height,
-    width: box.width,
-    height: box.height,
+    x: target.x - w / 2,
+    y: target.y - h,
+    width: w,
+    height: h,
   }
 }
 
 export function findNearestHit<T extends CollidableTarget>(
   point: Point,
   targets: readonly T[],
+  scale = 1,
 ): T | null {
-  const containing = targets.filter((t) => t.isAlive && isPointInAABB(point, aabbFor(t)))
+  const containing = targets.filter(
+    (t) => t.isAlive && isPointInAABB(point, aabbFor(t, scale)),
+  )
   if (containing.length === 0) return null
   // Prefer the zombie drawn in front (highest y), matching the client's
   // depth-sort tiebreak in CollisionDetector.
