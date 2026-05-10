@@ -1,4 +1,4 @@
-import { Container, Graphics, Sprite } from 'pixi.js'
+import { Container, Graphics, Sprite, Text } from 'pixi.js'
 import type {
   GameEndedPayload,
   GameStartedPayload,
@@ -43,6 +43,7 @@ export class GameScene extends Scene {
   private arrivalLineX = 0
   private lastSentInput: InputPayload | null = null
   private worldPointer = { x: 0, y: 0 }
+  private hud: Text | null = null
 
   constructor(private readonly game: Game) {
     super()
@@ -119,6 +120,7 @@ export class GameScene extends Scene {
     this.maybeEmitInput()
 
     if (this.game.input.consumeFire()) {
+      console.log('[debug] firing at world', this.worldPointer)
       this.game.net.emit('fire', { pointer: { ...this.worldPointer } })
     }
 
@@ -176,6 +178,7 @@ export class GameScene extends Scene {
   private applyState(payload: StatePayload): void {
     if (!this.gameStarted) return
     const seen = new Set<string>()
+    const me = this.game.net.id
     for (const state of payload.players) {
       seen.add(state.id)
       const existing = this.remoteZombies.get(state.id)
@@ -186,6 +189,7 @@ export class GameScene extends Scene {
         this.remoteZombies.set(state.id, z)
         this.gameLayer.addChild(z)
       }
+      if (state.id === me) this.refreshHud(state)
     }
     // Remove entities that vanished from the snapshot (covered fully in Task 8;
     // here it's a defensive pass so late-join recovery works correctly).
@@ -252,20 +256,38 @@ export class GameScene extends Scene {
 
     this.spawnCrosshair()
     this.drawArrivalLine()
+    this.buildHud()
 
+    const me = this.game.net.id
     for (const state of payload.players) {
       const zombie = this.makeZombie(state)
       this.remoteZombies.set(state.id, zombie)
       this.gameLayer.addChild(zombie)
+      if (state.id === me) this.refreshHud(state)
     }
 
     // Drain any stale fire flag from the click that triggered Démarrer (or
     // Replay). Without this, the first update() after gameStarted=true would
-    // consume that click and immediately emit('fire'), burning the host's
-    // only bullet on game-start.
+    // consume that click and immediately emit('fire').
     this.game.input.consumeFire()
 
     this.gameStarted = true
+  }
+
+  private buildHud(): void {
+    if (this.hud) return
+    this.hud = new Text({
+      text: 'Balles : —',
+      style: { fill: 0xfff700, fontSize: 18, fontFamily: 'Space Mono, monospace' },
+    })
+    this.hud.position.set(20, 20)
+    this.addChild(this.hud)
+  }
+
+  private refreshHud(state: PlayerState): void {
+    if (!this.hud) return
+    const alive = state.isAlive ? '' : ' (mort)'
+    this.hud.text = `Balles : ${state.bulletsRemaining}${alive}`
   }
 
   private spawnCrosshair(): void {

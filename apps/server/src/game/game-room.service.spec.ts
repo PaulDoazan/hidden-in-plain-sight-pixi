@@ -1,6 +1,6 @@
 import { ARRIVAL_LINE_X, SERVER_TICK_HZ, WALK_SPEED, RUN_SPEED } from '@hips/shared'
 
-import { GameRoomService } from './game-room.service'
+import { BULLETS_PER_PLAYER, GameRoomService } from './game-room.service'
 
 describe('GameRoomService — lobby', () => {
   let room: GameRoomService
@@ -75,7 +75,7 @@ describe('GameRoomService — start', () => {
       expect(p.y).toBeLessThan(886)
       expect(p.animation).toBe('idle')
       expect(p.isAlive).toBe(true)
-      expect(p.bulletsRemaining).toBe(1)
+      expect(p.bulletsRemaining).toBe(BULLETS_PER_PLAYER)
     }
     expect(room.snapshotLobby().status).toBe('running')
   })
@@ -179,7 +179,9 @@ describe('GameRoomService — fire', () => {
     const after = room.snapshotState()
     expect(after.players.find((p) => p.id === 'b')!.isAlive).toBe(false)
     expect(after.players.find((p) => p.id === 'b')!.animation).toBe('die')
-    expect(after.players.find((p) => p.id === 'a')!.bulletsRemaining).toBe(0)
+    expect(after.players.find((p) => p.id === 'a')!.bulletsRemaining).toBe(
+      BULLETS_PER_PLAYER - 1,
+    )
   })
 
   it('refuses to shoot oneself', () => {
@@ -189,10 +191,11 @@ describe('GameRoomService — fire', () => {
   })
 
   it('refuses to fire when no bullets remain', () => {
+    // Force-empty the magazine so this test stays meaningful regardless of
+    // BULLETS_PER_PLAYER (kept high in dev mode for stress-testing fire sync).
+    room.setBulletsForTest('a', 0)
     const b = room.snapshotState().players.find((p) => p.id === 'b')!
-    room.fire('a', { x: b.x, y: b.y - 10 }) // burns the only bullet
-    const second = room.fire('a', { x: b.x, y: b.y - 10 })
-    expect(second).toBeNull()
+    expect(room.fire('a', { x: b.x, y: b.y - 10 })).toBeNull()
   })
 
   it('refuses to fire when the shooter is dead', () => {

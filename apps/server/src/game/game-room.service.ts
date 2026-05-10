@@ -22,7 +22,9 @@ import {
 import { findNearestHit } from './collision'
 
 const TYPES: ZombieType[] = ['man', 'woman', 'wild']
-const BULLETS_PER_PLAYER = 1
+// DEV mode: effectively unlimited so we can stress-test fire/sync without
+// having to reload between every shot. Revert to 1 for real gameplay.
+export const BULLETS_PER_PLAYER = 999
 
 @Injectable()
 export class GameRoomService {
@@ -129,6 +131,13 @@ export class GameRoomService {
   teleportForTest(id: string, x: number): void {
     const p = this.players.get(id)
     if (p) p.x = x
+  }
+
+  // Test-only helper to force a player's bullet count (used to keep the
+  // out-of-bullets test meaningful when BULLETS_PER_PLAYER is bumped for dev).
+  setBulletsForTest(id: string, count: number): void {
+    const p = this.players.get(id)
+    if (p) p.bulletsRemaining = count
   }
 
   // Test-only helper to flip a player to dead without going through the
