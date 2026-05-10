@@ -1,5 +1,40 @@
-export * from './zombie'
-import type { ZombieAnimation, ZombieType } from './zombie'
+// Single-file shared package. Concerns are kept side-by-side intentionally:
+// - World constants (coords, tick rate, speeds)
+// - Zombie + game-state types
+// - Socket event payload types and event maps
+//
+// Why single file: the CommonJS output of TS `export * from`/`export { … } from`
+// uses `Object.defineProperty(exports, …)` re-exports that esbuild's static
+// CJS lexer (used by Vite's optimizeDeps) does not surface as named ESM
+// exports — so the browser side ends up with `does not provide an export
+// named 'X'` errors. A single source file emits direct `exports.X = X`
+// statements, which esbuild detects and re-exports cleanly.
+
+// ─── World constants ──────────────────────────────────────────────────────
+
+export const WORLD_WIDTH = 1920
+export const WORLD_HEIGHT = 886
+
+// Margin from the right edge to the dashed arrival line, in world units.
+export const ARRIVAL_LINE_MARGIN = 80
+export const ARRIVAL_LINE_X = WORLD_WIDTH - ARRIVAL_LINE_MARGIN
+
+export const SERVER_TICK_HZ = 30
+
+// Movement speeds are expressed in px/frame at a 60 FPS reference, matching
+// the existing client tuning. The server scales them to its tick rate via
+// `pxPerTick = pxPerFrame * (60 / SERVER_TICK_HZ)`.
+export const WALK_SPEED = 0.5
+export const RUN_SPEED = 1.2
+
+// Spawn positions: every player spawns somewhere in this band on the x axis.
+export const SPAWN_BAND_X = 30
+export const SPAWN_BAND_WIDTH = 40
+
+// ─── Zombie + game-state types ────────────────────────────────────────────
+
+export type ZombieType = 'man' | 'woman' | 'wild'
+export type ZombieAnimation = 'walk' | 'idle' | 'die' | 'run'
 
 export interface GameConfig {
   numBots: number
@@ -18,5 +53,76 @@ export interface ZombieState {
   isAlive: boolean
 }
 
-export * from './world'
-export * from './events'
+// ─── Socket protocol ──────────────────────────────────────────────────────
+
+export interface PlayerState {
+  id: string
+  type: ZombieType
+  x: number
+  y: number
+  animation: ZombieAnimation
+  isAlive: boolean
+  bulletsRemaining: number
+}
+
+export type RoomStatus = 'waiting' | 'running' | 'ended'
+
+export interface InputPayload {
+  keys: { space: boolean; shift: boolean }
+  pointer: { x: number; y: number } // world coordinates
+}
+
+export interface FirePayload {
+  pointer: { x: number; y: number } // world coordinates
+}
+
+export interface LobbyStatePayload {
+  players: { id: string; isHost: boolean }[]
+  status: RoomStatus
+}
+
+export interface GameStartedPayload {
+  players: PlayerState[]
+  arrivalLineX: number
+}
+
+export interface StatePayload {
+  players: PlayerState[]
+}
+
+export interface ShotFiredPayload {
+  shooterId: string
+  origin: { x: number; y: number }
+  hit: { targetId: string } | null
+}
+
+export interface PlayerKilledPayload {
+  id: string
+}
+
+export interface GameEndedPayload {
+  winnerId: string
+}
+
+export interface PlayerLeftPayload {
+  id: string
+}
+
+// Client → Server
+export interface ClientToServerEvents {
+  start: () => void // host only, valid in `waiting`
+  replay: () => void // host only, valid in `ended` — resets to `waiting`
+  input: (payload: InputPayload) => void
+  fire: (payload: FirePayload) => void
+}
+
+// Server → Client
+export interface ServerToClientEvents {
+  'lobby-state': (payload: LobbyStatePayload) => void
+  'game-started': (payload: GameStartedPayload) => void
+  state: (payload: StatePayload) => void // 30 Hz
+  'shot-fired': (payload: ShotFiredPayload) => void
+  'player-killed': (payload: PlayerKilledPayload) => void
+  'game-ended': (payload: GameEndedPayload) => void
+  'player-left': (payload: PlayerLeftPayload) => void
+}

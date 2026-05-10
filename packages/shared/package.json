@@ -3,10 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "main": "./dist/index.js",
+  "module": "./src/index.ts",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "browser": "./src/index.ts",
+      "import": "./src/index.ts",
+      "require": "./dist/index.js",
       "default": "./dist/index.js"
     }
   },
