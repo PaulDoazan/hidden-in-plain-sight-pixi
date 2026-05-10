@@ -8,6 +8,8 @@ export interface ButtonOptions {
 }
 
 export class Button extends Container {
+  private readonly labelText: Text
+
   constructor(options: ButtonOptions) {
     super()
     const w = options.width ?? 200
@@ -18,15 +20,19 @@ export class Button extends Container {
       .fill({ color: 0x1f2937 })
       .stroke({ width: 2, color: 0xfff700 })
 
-    const label = new Text({
+    this.labelText = new Text({
       text: options.label,
       style: { fill: 0xfff700, fontSize: 22, fontFamily: 'Space Mono, monospace' },
     })
-    label.anchor.set(0.5)
+    this.labelText.anchor.set(0.5)
 
-    this.addChild(bg, label)
+    this.addChild(bg, this.labelText)
     this.eventMode = 'static'
     this.cursor = 'pointer'
     this.on('pointertap', options.onClick)
+  }
+
+  setLabel(text: string): void {
+    this.labelText.text = text
   }
 }

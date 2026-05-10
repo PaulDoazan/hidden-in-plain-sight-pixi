@@ -15,6 +15,8 @@ export class WaitingRoomOverlay extends Container {
   private readonly count: Text
   private startBtn: Button | null = null
   private hostHint: Text | null = null
+  private copyBtn: Button | null = null
+  private copyResetTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly opts: WaitingRoomOverlayOptions) {
     super()
@@ -38,7 +40,7 @@ export class WaitingRoomOverlay extends Container {
         style: { fill: 0xaaaaaa, fontSize: 14, fontFamily: 'Space Mono, monospace' },
       })
       codeLabel.anchor.set(0.5)
-      codeLabel.position.set(opts.width / 2, opts.height / 2 - 90)
+      codeLabel.position.set(opts.width / 2, opts.height / 2 - 100)
       this.addChild(codeLabel)
 
       const codeText = new Text({
@@ -51,8 +53,18 @@ export class WaitingRoomOverlay extends Container {
         },
       })
       codeText.anchor.set(0.5)
-      codeText.position.set(opts.width / 2, opts.height / 2 - 55)
+      codeText.position.set(opts.width / 2, opts.height / 2 - 60)
       this.addChild(codeText)
+
+      const copyBtn = new Button({
+        label: 'Copier le code',
+        width: 160,
+        height: 36,
+        onClick: () => void this.copyCode(opts.code as string),
+      })
+      copyBtn.position.set(opts.width / 2, opts.height / 2 - 15)
+      this.addChild(copyBtn)
+      this.copyBtn = copyBtn
     }
 
     this.count = new Text({
@@ -60,7 +72,7 @@ export class WaitingRoomOverlay extends Container {
       style: { fill: 0xffffff, fontSize: 22, fontFamily: 'Space Mono, monospace' },
     })
     this.count.anchor.set(0.5)
-    this.count.position.set(opts.width / 2, opts.height / 2 + 5)
+    this.count.position.set(opts.width / 2, opts.height / 2 + 30)
     this.addChild(this.count)
 
     if (opts.isHost) this.addStartButton()
@@ -109,5 +121,48 @@ export class WaitingRoomOverlay extends Container {
     if (!this.hostHint) return
     this.hostHint.destroy()
     this.hostHint = null
+  }
+
+  private async copyCode(code: string): Promise<void> {
+    let ok: boolean
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(code)
+        ok = true
+      } else {
+        // Fallback for browsers without the async Clipboard API
+        // (e.g. non-secure contexts). Uses a transient input + execCommand.
+        const tmp = document.createElement('input')
+        tmp.value = code
+        tmp.style.position = 'fixed'
+        tmp.style.opacity = '0'
+        document.body.appendChild(tmp)
+        tmp.select()
+        ok = document.execCommand('copy')
+        document.body.removeChild(tmp)
+      }
+    } catch {
+      ok = false
+    }
+    this.flashCopyLabel(ok ? 'Copié !' : 'Échec, copie-le à la main')
+  }
+
+  private flashCopyLabel(message: string): void {
+    if (!this.copyBtn) return
+    const btn = this.copyBtn
+    btn.setLabel(message)
+    if (this.copyResetTimer) clearTimeout(this.copyResetTimer)
+    this.copyResetTimer = setTimeout(() => {
+      btn.setLabel('Copier le code')
+      this.copyResetTimer = null
+    }, 1500)
+  }
+
+  override destroy(options?: Parameters<Container['destroy']>[0]): void {
+    if (this.copyResetTimer) {
+      clearTimeout(this.copyResetTimer)
+      this.copyResetTimer = null
+    }
+    super.destroy(options)
   }
 }
