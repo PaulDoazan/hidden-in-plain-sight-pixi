@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common'
 import type {
   GameStartedPayload,
   InputPayload,
@@ -22,11 +21,9 @@ import {
 import { findNearestHit } from './collision'
 
 const TYPES: ZombieType[] = ['man', 'woman', 'wild']
-// DEV mode: effectively unlimited so we can stress-test fire/sync without
-// having to reload between every shot. Revert to 1 for real gameplay.
-export const BULLETS_PER_PLAYER = 999
+export const BULLETS_PER_PLAYER = 1
 
-@Injectable()
+// Per-room state. Owned and instantiated by RoomRegistry; not a Nest provider.
 export class GameRoomService {
   private readonly playerOrder: string[] = []
   private readonly players = new Map<string, PlayerState>()

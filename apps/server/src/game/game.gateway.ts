@@ -12,12 +12,14 @@ import type {
   ClientToServerEvents,
   FirePayload,
   InputPayload,
+  JoinRoomPayload,
   ServerToClientEvents,
 } from '@hips/shared'
 import { SERVER_TICK_HZ } from '@hips/shared'
 import type { Server, Socket } from 'socket.io'
 
 import { GameRoomService } from './game-room.service'
+import { RoomRegistry } from './room-registry.service'
 
 type AppSocket = Socket<ClientToServerEvents, ServerToClientEvents>
 type AppServer = Server<ClientToServerEvents, ServerToClientEvents>
@@ -29,33 +31,84 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   private readonly server!: AppServer
 
-  private tickHandle: ReturnType<typeof setInterval> | null = null
+  // Per-room tick loop handles. Each room ticks independently at 30 Hz once
+  // its `start` is acknowledged, and is cleared on game-end or empty-room.
+  private readonly tickHandles = new Map<string, ReturnType<typeof setInterval>>()
 
-  constructor(private readonly room: GameRoomService) {}
+  // socketId → roomCode mapping. Populated on create-room / join-room, cleared
+  // on disconnect. A socket without an entry here is connected but not yet
+  // attached to a room (sitting on HomeScene).
+  private readonly socketRooms = new Map<string, string>()
+
+  constructor(private readonly registry: RoomRegistry) {}
 
   handleConnection(socket: AppSocket): void {
     this.logger.log(`connected: ${socket.id}`)
-    this.room.addPlayer(socket.id)
-    this.broadcastLobby()
+    // No room assignment yet: client must emit create-room or join-room.
   }
 
   handleDisconnect(socket: AppSocket): void {
     this.logger.log(`disconnected: ${socket.id}`)
-    this.room.removePlayer(socket.id)
-    this.server.emit('player-left', { id: socket.id })
-    this.broadcastLobby()
-    // Room emptied: tick loop has nothing to broadcast, stop it so the next
-    // `start` opens a fresh tick rather than racing the previous interval.
-    if (this.room.isEmpty()) this.stopTickLoop()
+    const code = this.socketRooms.get(socket.id)
+    if (!code) return
+    this.socketRooms.delete(socket.id)
+    const room = this.registry.get(code)
+    if (!room) return
+    room.removePlayer(socket.id)
+    this.server.to(code).emit('player-left', { id: socket.id })
+    this.broadcastLobby(code)
+    if (room.isEmpty()) {
+      this.stopTickLoop(code)
+      this.registry.remove(code)
+    }
+  }
+
+  @SubscribeMessage('create-room')
+  onCreateRoom(@ConnectedSocket() socket: AppSocket): void {
+    if (this.socketRooms.has(socket.id)) {
+      socket.emit('room-join-failed', { reason: 'already-in-room' })
+      return
+    }
+    const { code, room } = this.registry.create()
+    room.addPlayer(socket.id)
+    this.socketRooms.set(socket.id, code)
+    void socket.join(code)
+    socket.emit('room-created', { code, lobby: room.snapshotLobby() })
+    this.broadcastLobby(code)
+    this.logger.log(`room ${code} created by ${socket.id}`)
+  }
+
+  @SubscribeMessage('join-room')
+  onJoinRoom(
+    @ConnectedSocket() socket: AppSocket,
+    @MessageBody() payload: JoinRoomPayload,
+  ): void {
+    if (this.socketRooms.has(socket.id)) {
+      socket.emit('room-join-failed', { reason: 'already-in-room' })
+      return
+    }
+    const code = payload.code.toUpperCase()
+    const room = this.registry.get(code)
+    if (!room) {
+      socket.emit('room-join-failed', { reason: 'not-found' })
+      return
+    }
+    room.addPlayer(socket.id)
+    this.socketRooms.set(socket.id, code)
+    void socket.join(code)
+    socket.emit('room-joined', { code, lobby: room.snapshotLobby() })
+    this.broadcastLobby(code)
   }
 
   @SubscribeMessage('start')
   onStart(@ConnectedSocket() socket: AppSocket): void {
-    const result = this.room.start(socket.id)
+    const ctx = this.roomFor(socket)
+    if (!ctx) return
+    const result = ctx.room.start(socket.id)
     if (!result) return
-    this.server.emit('game-started', result)
-    this.broadcastLobby()
-    this.startTickLoop()
+    this.server.to(ctx.code).emit('game-started', result)
+    this.broadcastLobby(ctx.code)
+    this.startTickLoop(ctx.code)
   }
 
   @SubscribeMessage('input')
@@ -63,13 +116,17 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() socket: AppSocket,
     @MessageBody() payload: InputPayload,
   ): void {
-    this.room.applyInput(socket.id, payload)
+    const ctx = this.roomFor(socket)
+    if (!ctx) return
+    ctx.room.applyInput(socket.id, payload)
   }
 
   @SubscribeMessage('replay')
   onReplay(@ConnectedSocket() socket: AppSocket): void {
-    if (!this.room.replay(socket.id)) return
-    this.broadcastLobby()
+    const ctx = this.roomFor(socket)
+    if (!ctx) return
+    if (!ctx.room.replay(socket.id)) return
+    this.broadcastLobby(ctx.code)
   }
 
   @SubscribeMessage('fire')
@@ -77,35 +134,54 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() socket: AppSocket,
     @MessageBody() payload: FirePayload,
   ): void {
-    const result = this.room.fire(socket.id, payload.pointer, payload.scale)
+    const ctx = this.roomFor(socket)
+    if (!ctx) return
+    const result = ctx.room.fire(socket.id, payload.pointer, payload.scale)
     if (!result) return
-    this.server.emit('shot-fired', result)
+    this.server.to(ctx.code).emit('shot-fired', result)
     if (result.hit) {
-      this.server.emit('player-killed', { id: result.hit.targetId })
+      this.server.to(ctx.code).emit('player-killed', { id: result.hit.targetId })
     }
   }
 
-  private startTickLoop(): void {
-    if (this.tickHandle) return
+  private roomFor(socket: AppSocket): { code: string; room: GameRoomService } | null {
+    const code = this.socketRooms.get(socket.id)
+    if (!code) return null
+    const room = this.registry.get(code)
+    if (!room) return null
+    return { code, room }
+  }
+
+  private startTickLoop(code: string): void {
+    if (this.tickHandles.has(code)) return
     const intervalMs = 1000 / SERVER_TICK_HZ
-    this.tickHandle = setInterval(() => {
-      const winner = this.room.tickAndCheckWinner()
-      this.server.emit('state', this.room.snapshotState())
+    const handle = setInterval(() => {
+      const room = this.registry.get(code)
+      if (!room) {
+        this.stopTickLoop(code)
+        return
+      }
+      const winner = room.tickAndCheckWinner()
+      this.server.to(code).emit('state', room.snapshotState())
       if (winner) {
-        this.stopTickLoop()
-        this.server.emit('game-ended', winner)
-        this.broadcastLobby()
+        this.stopTickLoop(code)
+        this.server.to(code).emit('game-ended', winner)
+        this.broadcastLobby(code)
       }
     }, intervalMs)
+    this.tickHandles.set(code, handle)
   }
 
-  private stopTickLoop(): void {
-    if (!this.tickHandle) return
-    clearInterval(this.tickHandle)
-    this.tickHandle = null
+  private stopTickLoop(code: string): void {
+    const handle = this.tickHandles.get(code)
+    if (!handle) return
+    clearInterval(handle)
+    this.tickHandles.delete(code)
   }
 
-  private broadcastLobby(): void {
-    this.server.emit('lobby-state', this.room.snapshotLobby())
+  private broadcastLobby(code: string): void {
+    const room = this.registry.get(code)
+    if (!room) return
+    this.server.to(code).emit('lobby-state', room.snapshotLobby())
   }
 }

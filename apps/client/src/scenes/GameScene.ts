@@ -45,12 +45,18 @@ export class GameScene extends Scene {
   private worldPointer = { x: 0, y: 0 }
   private hud: Text | null = null
   private isAlive = true
+  private roomCode: string | null = null
 
   constructor(private readonly game: Game) {
     super()
   }
 
   onEnter(params?: unknown): void {
+    const typed = params as
+      | { initialLobby?: LobbyStatePayload; code?: string }
+      | undefined
+    this.roomCode = typed?.code ?? null
+
     this.buildLayers()
     this.buildBackground()
     this.showWaitingOverlay()
@@ -72,9 +78,7 @@ export class GameScene extends Scene {
     this.game.net.on('game-ended', this.gameEndedHandler)
     this.game.net.on('player-left', this.playerLeftHandler)
 
-    const initial = (params as { initialLobby?: LobbyStatePayload } | undefined)
-      ?.initialLobby
-    if (initial) this.applyLobby(initial)
+    if (typed?.initialLobby) this.applyLobby(typed.initialLobby)
   }
 
   onExit(): void {
@@ -121,7 +125,6 @@ export class GameScene extends Scene {
     this.maybeEmitInput()
 
     if (this.game.input.consumeFire()) {
-      console.log('[debug] firing at world', this.worldPointer)
       this.game.net.emit('fire', {
         pointer: { ...this.worldPointer },
         scale: this.game.layout.zombieScale,
@@ -155,7 +158,10 @@ export class GameScene extends Scene {
 
   private onGameEnded(payload: GameEndedPayload): void {
     const won = payload.winnerId === this.game.net.id
-    void this.game.sceneManager.goTo(new EndScene(this.game), { won })
+    void this.game.sceneManager.goTo(new EndScene(this.game), {
+      won,
+      code: this.roomCode,
+    })
   }
 
   private maybeEmitInput(): void {
@@ -241,6 +247,7 @@ export class GameScene extends Scene {
       height: canvasHeight,
       playerCount: 0,
       isHost: false,
+      code: this.roomCode,
       onStart: () => {
         this.game.net.emit('start')
       },

@@ -9,6 +9,7 @@ import { Scene } from './Scene'
 
 export interface EndSceneParams {
   won: boolean
+  code: string | null
 }
 
 export class EndScene extends Scene {
@@ -17,13 +18,16 @@ export class EndScene extends Scene {
   private replayBtn: Button | null = null
   private hint: Text | null = null
   private lobbyHandler: ((payload: LobbyStatePayload) => void) | null = null
+  private roomCode: string | null = null
 
   constructor(private readonly game: Game) {
     super()
   }
 
   onEnter(params?: unknown): void {
-    const won = (params as EndSceneParams | undefined)?.won ?? true
+    const typed = params as EndSceneParams | undefined
+    const won = typed?.won ?? true
+    this.roomCode = typed?.code ?? null
     const { canvasWidth, canvasHeight } = this.game.layout
 
     this.message = new Text({
@@ -62,12 +66,12 @@ export class EndScene extends Scene {
     const isHost = payload.players.some((p) => p.id === me && p.isHost)
 
     if (payload.status === 'waiting') {
-      // Server reset the room — back to lobby for everyone. We pass the lobby
-      // payload as scene params so GameScene.onEnter can render the right
-      // count immediately, without racing against a fresh `lobby-state` event
-      // that may never come (everyone is already connected).
+      // Server reset the room — back to lobby for everyone. Carry both the
+      // initial lobby snapshot and the code so GameScene shows the badge
+      // without racing for a fresh `lobby-state` event.
       void this.game.sceneManager.goTo(new GameScene(this.game), {
         initialLobby: payload,
+        code: this.roomCode,
       })
       return
     }

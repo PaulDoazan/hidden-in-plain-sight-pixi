@@ -112,8 +112,30 @@ export interface PlayerLeftPayload {
   id: string
 }
 
+export interface JoinRoomPayload {
+  code: string
+}
+
+export interface RoomCreatedPayload {
+  code: string
+  lobby: LobbyStatePayload
+}
+
+export interface RoomJoinedPayload {
+  code: string
+  lobby: LobbyStatePayload
+}
+
+export type RoomJoinFailReason = 'not-found' | 'already-in-room'
+
+export interface RoomJoinFailedPayload {
+  reason: RoomJoinFailReason
+}
+
 // Client → Server
 export interface ClientToServerEvents {
+  'create-room': () => void
+  'join-room': (payload: JoinRoomPayload) => void
   start: () => void // host only, valid in `waiting`
   replay: () => void // host only, valid in `ended` — resets to `waiting`
   input: (payload: InputPayload) => void
@@ -122,6 +144,9 @@ export interface ClientToServerEvents {
 
 // Server → Client
 export interface ServerToClientEvents {
+  'room-created': (payload: RoomCreatedPayload) => void
+  'room-joined': (payload: RoomJoinedPayload) => void
+  'room-join-failed': (payload: RoomJoinFailedPayload) => void
   'lobby-state': (payload: LobbyStatePayload) => void
   'game-started': (payload: GameStartedPayload) => void
   state: (payload: StatePayload) => void // 30 Hz

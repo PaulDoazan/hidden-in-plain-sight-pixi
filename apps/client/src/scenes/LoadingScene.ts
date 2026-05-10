@@ -13,7 +13,7 @@ export class LoadingScene extends Scene {
     super()
   }
 
-  async onEnter(): Promise<void> {
+  async onEnter(params?: unknown): Promise<void> {
     const { canvasWidth, canvasHeight } = this.game.layout
 
     const label = new Text({
@@ -29,7 +29,7 @@ export class LoadingScene extends Scene {
     this.addChild(this.bar)
 
     await this.game.assets.loadAll((p) => this.bar?.set(p))
-    await this.game.sceneManager.goTo(new GameScene(this.game))
+    await this.game.sceneManager.goTo(new GameScene(this.game), params)
   }
 
   onExit(): void {}

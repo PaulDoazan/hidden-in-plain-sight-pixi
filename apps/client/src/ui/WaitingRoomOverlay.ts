@@ -7,6 +7,7 @@ export interface WaitingRoomOverlayOptions {
   height: number
   playerCount: number
   isHost: boolean
+  code: string | null
   onStart: () => void
 }
 
@@ -28,15 +29,38 @@ export class WaitingRoomOverlay extends Container {
       style: { fill: 0xfff700, fontSize: 36, fontFamily: 'Space Mono, monospace' },
     })
     title.anchor.set(0.5)
-    title.position.set(opts.width / 2, opts.height / 2 - 100)
+    title.position.set(opts.width / 2, opts.height / 2 - 140)
     this.addChild(title)
+
+    if (opts.code) {
+      const codeLabel = new Text({
+        text: 'Code de la partie',
+        style: { fill: 0xaaaaaa, fontSize: 14, fontFamily: 'Space Mono, monospace' },
+      })
+      codeLabel.anchor.set(0.5)
+      codeLabel.position.set(opts.width / 2, opts.height / 2 - 90)
+      this.addChild(codeLabel)
+
+      const codeText = new Text({
+        text: opts.code,
+        style: {
+          fill: 0xfff700,
+          fontSize: 44,
+          fontFamily: 'Space Mono, monospace',
+          letterSpacing: 6,
+        },
+      })
+      codeText.anchor.set(0.5)
+      codeText.position.set(opts.width / 2, opts.height / 2 - 55)
+      this.addChild(codeText)
+    }
 
     this.count = new Text({
       text: this.formatCount(opts.playerCount),
       style: { fill: 0xffffff, fontSize: 22, fontFamily: 'Space Mono, monospace' },
     })
     this.count.anchor.set(0.5)
-    this.count.position.set(opts.width / 2, opts.height / 2 - 30)
+    this.count.position.set(opts.width / 2, opts.height / 2 + 5)
     this.addChild(this.count)
 
     if (opts.isHost) this.addStartButton()
@@ -64,7 +88,7 @@ export class WaitingRoomOverlay extends Container {
 
   private addStartButton(): void {
     const btn = new Button({ label: 'Démarrer', onClick: this.opts.onStart })
-    btn.position.set(this.opts.width / 2, this.opts.height / 2 + 60)
+    btn.position.set(this.opts.width / 2, this.opts.height / 2 + 90)
     this.addChild(btn)
     this.startBtn = btn
   }
@@ -76,7 +100,7 @@ export class WaitingRoomOverlay extends Container {
       style: { fill: 0xaaaaaa, fontSize: 18, fontFamily: 'Space Mono, monospace' },
     })
     hint.anchor.set(0.5)
-    hint.position.set(this.opts.width / 2, this.opts.height / 2 + 60)
+    hint.position.set(this.opts.width / 2, this.opts.height / 2 + 90)
     this.addChild(hint)
     this.hostHint = hint
   }

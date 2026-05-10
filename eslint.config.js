@@ -25,6 +25,7 @@ export default [
         requestAnimationFrame: 'readonly',
         HTMLElement: 'readonly',
         HTMLCanvasElement: 'readonly',
+        HTMLInputElement: 'readonly',
         KeyboardEvent: 'readonly',
         MouseEvent: 'readonly',
         PointerEvent: 'readonly',
