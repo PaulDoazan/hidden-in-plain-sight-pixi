@@ -1,4 +1,4 @@
-import { Container, Graphics, Sprite, Text } from 'pixi.js'
+import { Container, type FederatedPointerEvent, Graphics, Sprite, Text } from 'pixi.js'
 import type {
   GameEndedPayload,
   GameStartedPayload,
@@ -22,6 +22,8 @@ import { Crosshair } from '../entities/Crosshair'
 import { FireShot } from '../entities/FireShot'
 import { PlayerZombie } from '../entities/PlayerZombie'
 import type { Layout } from '../systems/Layout'
+import { isMobileDevice } from '../systems/Platform'
+import { MobileControls } from '../ui/MobileControls'
 import { WaitingRoomOverlay } from '../ui/WaitingRoomOverlay'
 
 import { EndScene } from './EndScene'
@@ -51,6 +53,15 @@ export class GameScene extends Scene {
   private hud: Text | null = null
   private isAlive = true
   private roomCode: string | null = null
+  private touchSurface: Graphics | null = null
+  private mobileControls: MobileControls | null = null
+  // Window-level move/up handlers keyed by pointerId, attached at touch-down
+  // so a single finger can keep dragging the crosshair even when it slides
+  // over a button or off the canvas mid-drag.
+  private dragHandlers = new Map<
+    number,
+    { move: (e: PointerEvent) => void; up: (e: PointerEvent) => void }
+  >()
 
   constructor(private readonly game: Game) {
     super()
@@ -64,6 +75,7 @@ export class GameScene extends Scene {
 
     this.buildLayers()
     this.buildBackground()
+    this.setupMobileUI()
     this.showWaitingOverlay()
 
     this.lobbyHandler = (payload) => this.applyLobby(payload)
@@ -87,6 +99,7 @@ export class GameScene extends Scene {
   }
 
   onExit(): void {
+    this.teardownMobileUI()
     this.waitingOverlay?.destroy({ children: true })
     this.waitingOverlay = null
     if (this.lobbyHandler) {
@@ -163,6 +176,92 @@ export class GameScene extends Scene {
     for (const z of this.remoteZombies.values()) z.scale.set(zombieScale)
 
     this.waitingOverlay?.resize(canvasWidth, canvasHeight)
+
+    if (this.touchSurface) {
+      this.touchSurface
+        .clear()
+        .rect(0, 0, canvasWidth, canvasHeight)
+        .fill({ color: 0x000000, alpha: 0 })
+    }
+    this.mobileControls?.resize(canvasHeight)
+  }
+
+  private setupMobileUI(): void {
+    if (!isMobileDevice()) return
+    const { canvasWidth, canvasHeight } = this.game.layout
+
+    // Invisible full-canvas hit area. Anything that isn't claimed by a higher
+    // sibling (buttons, overlays) lands here, where the drag handler picks it
+    // up. eventMode='static' is what makes the rect participate in hit tests.
+    this.touchSurface = new Graphics()
+      .rect(0, 0, canvasWidth, canvasHeight)
+      .fill({ color: 0x000000, alpha: 0 })
+    this.touchSurface.eventMode = 'static'
+    this.touchSurface.on('pointerdown', this.onTouchSurfaceDown)
+    // Sit right above the bg layer so gameplay layers (zombies, effects,
+    // overlays, controls) render and hit-test on top of the surface.
+    this.addChildAt(this.touchSurface, 1)
+
+    this.mobileControls = new MobileControls({
+      canvasHeight,
+      onWalkDown: () => this.game.input.setVirtualSpace(true),
+      onWalkUp: () => this.game.input.setVirtualSpace(false),
+      onRunDown: () => {
+        this.game.input.setVirtualSpace(true)
+        this.game.input.setVirtualShift(true)
+      },
+      onRunUp: () => {
+        this.game.input.setVirtualSpace(false)
+        this.game.input.setVirtualShift(false)
+      },
+      onFire: () => this.game.input.triggerFire(),
+    })
+    this.addChild(this.mobileControls)
+  }
+
+  private teardownMobileUI(): void {
+    this.mobileControls?.releaseAll()
+    this.mobileControls?.destroy({ children: true })
+    this.mobileControls = null
+    if (this.touchSurface) {
+      this.touchSurface.off('pointerdown', this.onTouchSurfaceDown)
+      this.touchSurface.destroy()
+      this.touchSurface = null
+    }
+    for (const { move, up } of this.dragHandlers.values()) {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+    }
+    this.dragHandlers.clear()
+  }
+
+  // Touch-drag entry point: a finger lands on the canvas in a non-button area.
+  // We snap the crosshair to the touchdown point and then track that finger
+  // via window-level listeners — so the drag keeps working even if the finger
+  // slides over a button or temporarily leaves the canvas. Each finger gets
+  // its own pair of handlers, which is what enables walk + drag + fire to
+  // happen on three fingers concurrently.
+  private onTouchSurfaceDown = (event: FederatedPointerEvent) => {
+    if (event.pointerType !== 'touch') return
+    const pid = event.pointerId
+    this.game.input.setPointer(event.global.x, event.global.y)
+
+    const move = (e: PointerEvent) => {
+      if (e.pointerId !== pid) return
+      this.game.input.setPointer(e.clientX, e.clientY)
+    }
+    const up = (e: PointerEvent) => {
+      if (e.pointerId !== pid) return
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      this.dragHandlers.delete(pid)
+    }
+    this.dragHandlers.set(pid, { move, up })
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
   }
 
   private onShotFired(payload: ShotFiredPayload): void {

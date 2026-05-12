@@ -7,6 +7,10 @@ export class InputManager {
   private readonly keys = new Set<string>()
   pointer: PointerPosition = { x: 0, y: 0 }
   private firedThisFrame = false
+  // Virtual key state driven by the mobile on-screen controls. Folded into
+  // isDown() so the rest of the game can stay agnostic of input source.
+  private virtualSpace = false
+  private virtualShift = false
 
   constructor(private readonly target: HTMLElement | Window = window) {
     this.target.addEventListener('keydown', this.onKeyDown as EventListener)
@@ -28,6 +32,8 @@ export class InputManager {
   }
 
   isDown(key: string): boolean {
+    if (key === ' ' && this.virtualSpace) return true
+    if (key === 'Shift' && this.virtualShift) return true
     return this.keys.has(key)
   }
 
@@ -35,6 +41,27 @@ export class InputManager {
     const fired = this.firedThisFrame
     this.firedThisFrame = false
     return fired
+  }
+
+  // Mobile controls bridge: the on-screen walk/run buttons toggle these flags
+  // so isDown(' ') / isDown('Shift') stay the single source of truth for
+  // movement state.
+  setVirtualSpace(value: boolean): void {
+    this.virtualSpace = value
+  }
+
+  setVirtualShift(value: boolean): void {
+    this.virtualShift = value
+  }
+
+  triggerFire(): void {
+    this.firedThisFrame = true
+  }
+
+  // Mobile drag bridge: the touch surface in GameScene reports finger position
+  // here so screen-space code (crosshair) keeps reading from a single source.
+  setPointer(x: number, y: number): void {
+    this.pointer = { x, y }
   }
 
   private onKeyDown = (event: KeyboardEvent) => {
@@ -47,11 +74,18 @@ export class InputManager {
   }
 
   private onPointerMove = (event: PointerEvent) => {
+    // Touch moves are driven by the scene-level drag handler, which respects
+    // mobile button hit-testing. Skipping them here avoids fighting Pixi over
+    // the cursor position when a finger crosses a button.
+    if (event.pointerType === 'touch') return
     this.pointer = { x: event.clientX, y: event.clientY }
   }
 
   private onPointerDown = (event: PointerEvent) => {
-    // Left mouse, primary touch, or primary pen tip all map to button 0.
+    // Mobile uses a dedicated Fire button — auto-firing on any touch would
+    // misfire on button presses and on the start of a crosshair drag.
+    if (event.pointerType === 'touch') return
+    // Left mouse, primary pen tip both map to button 0.
     if (event.button === 0) this.firedThisFrame = true
   }
 }
