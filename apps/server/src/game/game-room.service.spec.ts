@@ -86,18 +86,20 @@ describe('GameRoomService — start', () => {
     expect(room.snapshotLobby().status).toBe('running')
   })
 
-  it('places the host at the top of the lineup and everyone else below', () => {
+  it('places every zombie (host included) inside the shared spawn-y band', () => {
     room.addPlayer('a')
     room.addPlayer('b')
     room.addPlayer('c')
     const result = room.start('a')!
-    const host = result.players.find((p) => p.id === 'a')!
-    const others = result.players.filter((p) => p.id !== 'a')
-    for (const o of others) {
-      expect(o.y).toBeGreaterThan(host.y)
+    const yMin = 886 * (2 / 5)
+    const yMax = 886 * 0.9
+    for (const p of result.players) {
+      expect(p.y).toBeGreaterThanOrEqual(yMin)
+      expect(p.y).toBeLessThanOrEqual(yMax)
     }
     for (const b of result.bots) {
-      expect(b.y).toBeGreaterThan(host.y)
+      expect(b.y).toBeGreaterThanOrEqual(yMin)
+      expect(b.y).toBeLessThanOrEqual(yMax)
     }
   })
 
@@ -112,13 +114,20 @@ describe('GameRoomService — start', () => {
     }
   })
 
-  it('assigns zombie types in a stable cycle', () => {
+  it('assigns zombie types in a stable cycle keyed by player id', () => {
     room.addPlayer('a')
     room.addPlayer('b')
     room.addPlayer('c')
     room.addPlayer('d')
     const result = room.start('a')!
-    expect(result.players.map((p) => p.type)).toEqual(['man', 'woman', 'wild', 'man'])
+    // Players are inserted into the snapshot in shuffled spawn order to
+    // randomize their placement among bots, so the array order is no longer
+    // join order — assertions go by id.
+    const byId = new Map(result.players.map((p) => [p.id, p.type]))
+    expect(byId.get('a')).toBe('man')
+    expect(byId.get('b')).toBe('woman')
+    expect(byId.get('c')).toBe('wild')
+    expect(byId.get('d')).toBe('man')
   })
 
   it('refuses a second start call once the room is running', () => {
@@ -220,6 +229,9 @@ describe('GameRoomService — fire', () => {
   })
 
   it('refuses to shoot oneself', () => {
+    // Move 'a' away from the start cluster so the click can only overlap
+    // their own AABB (the shooter is filtered out → hit must be null).
+    room.teleportForTest('a', 1500)
     const a = room.snapshotState().players.find((p) => p.id === 'a')!
     const result = room.fire('a', { x: a.x, y: a.y - 10 })
     expect(result!.hit).toBeNull()

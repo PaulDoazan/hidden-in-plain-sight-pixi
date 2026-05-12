@@ -50,12 +50,12 @@ const CROSSHAIR_PALETTE: number[] = [
 const BOT_MIN_TICK = 20
 const BOT_MAX_TICK = 100
 
-// Vertical placement: the host gets the topmost spawn y; every other zombie
-// (players + bots) spawns below it. Top limit is two fifths of the world
-// height, so the whole lineup fits in the bottom three fifths of the screen.
-const HOST_SPAWN_Y = WORLD_HEIGHT * (2 / 5)
-const OTHERS_SPAWN_Y_MIN = HOST_SPAWN_Y + 30
-const OTHERS_SPAWN_Y_MAX = WORLD_HEIGHT * 0.9
+// Vertical placement: every zombie — host included — draws a random y from
+// the same band so a real player can't be spotted from their position alone.
+// Top limit is two fifths of the world height, matching the dashed arrival
+// line; bottom limit leaves a small bottom margin.
+const SPAWN_Y_MIN = WORLD_HEIGHT * (2 / 5)
+const SPAWN_Y_MAX = WORLD_HEIGHT * 0.9
 
 interface BotInternalState extends BotState {
   canMove: boolean
@@ -115,15 +115,47 @@ export class GameRoomService {
     if (this.playerOrder[0] !== requesterId) return null
 
     this.players.clear()
+    this.bots = []
+
+    // Build a single shuffled lineup of all entities — every real player
+    // (host included) and every bot — so a real player's spawn position is
+    // indistinguishable from a bot's.
+    type Slot =
+      | { kind: 'player'; id: string; index: number }
+      | { kind: 'bot'; index: number }
+    const slots: Slot[] = []
     this.playerOrder.forEach((id, i) => {
-      this.players.set(id, this.spawnPlayer(id, i))
+      slots.push({ kind: 'player', id, index: i })
     })
-    this.spawnBots()
+    for (let i = 0; i < BOT_COUNT; i++) {
+      slots.push({ kind: 'bot', index: i })
+    }
+    this.shuffle(slots)
+
+    for (const slot of slots) {
+      if (slot.kind === 'player') {
+        this.players.set(slot.id, this.spawnPlayer(slot.id, slot.index))
+      } else {
+        this.bots.push(this.spawnBot(slot.index))
+      }
+    }
+
     this.status = 'running'
     return {
       players: [...this.players.values()],
       bots: this.snapshotBots(),
       arrivalLineX: ARRIVAL_LINE_X,
+    }
+  }
+
+  // Fisher-Yates using the injected RNG so tests stay deterministic when they
+  // seed it.
+  private shuffle<T>(arr: T[]): void {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(this.rng() * (i + 1))
+      const tmp = arr[i]!
+      arr[i] = arr[j]!
+      arr[j] = tmp
     }
   }
 
@@ -256,20 +288,17 @@ export class GameRoomService {
     return this.bots
   }
 
-  private spawnBots(): void {
-    this.bots = []
-    for (let i = 0; i < BOT_COUNT; i++) {
-      const cycleRange = BOT_MAX_TICK - BOT_MIN_TICK
-      this.bots.push({
-        id: `bot-${i}`,
-        type: TYPES[i % TYPES.length]!,
-        x: this.spawnX(),
-        y: this.spawnOtherY(),
-        animation: 'idle',
-        isAlive: true,
-        canMove: false,
-        countTick: Math.floor(this.rng() * cycleRange) + BOT_MIN_TICK,
-      })
+  private spawnBot(i: number): BotInternalState {
+    const cycleRange = BOT_MAX_TICK - BOT_MIN_TICK
+    return {
+      id: `bot-${i}`,
+      type: TYPES[i % TYPES.length]!,
+      x: this.spawnX(),
+      y: this.spawnY(),
+      animation: 'idle',
+      isAlive: true,
+      canMove: false,
+      countTick: Math.floor(this.rng() * cycleRange) + BOT_MIN_TICK,
     }
   }
 
@@ -277,8 +306,8 @@ export class GameRoomService {
     return SPAWN_BAND_X + this.rng() * SPAWN_BAND_WIDTH
   }
 
-  private spawnOtherY(): number {
-    return OTHERS_SPAWN_Y_MIN + this.rng() * (OTHERS_SPAWN_Y_MAX - OTHERS_SPAWN_Y_MIN)
+  private spawnY(): number {
+    return SPAWN_Y_MIN + this.rng() * (SPAWN_Y_MAX - SPAWN_Y_MIN)
   }
 
   private tickBots(): void {
@@ -310,9 +339,7 @@ export class GameRoomService {
 
   private spawnPlayer(id: string, index: number): PlayerState {
     const x = this.spawnX()
-    // The host (index 0) anchors the top of the lineup; every other player
-    // spawns somewhere in the band below them.
-    const y = index === 0 ? HOST_SPAWN_Y : this.spawnOtherY()
+    const y = this.spawnY()
     return {
       id,
       type: TYPES[index % TYPES.length]!,
