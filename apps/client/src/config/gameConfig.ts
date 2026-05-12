@@ -24,6 +24,8 @@ export const defaultGameConfig: GameConfig = {
 export const DEBUG_HITBOXES = false
 
 export const CROSSHAIR_RADIUS = 25
-// Vertical offset where the dashed arrival line starts (top edge in world units).
-export const ARRIVAL_LINE_TOP_Y = 250
+// Vertical offset where the dashed arrival line starts (top edge in world
+// units). Aligned with the topmost zombie spawn y (host) so the line and
+// the lineup share the same upper boundary.
+export const ARRIVAL_LINE_TOP_Y = WORLD_HEIGHT * (2 / 5)
 export const CROSSHAIR_COLOR = 0xfff700

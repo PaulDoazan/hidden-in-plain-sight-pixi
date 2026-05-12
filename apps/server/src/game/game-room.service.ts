@@ -1,4 +1,5 @@
 import type {
+  BotState,
   GameStartedPayload,
   InputPayload,
   LobbyStatePayload,
@@ -9,6 +10,7 @@ import type {
 } from '@hips/shared'
 import {
   ARRIVAL_LINE_X,
+  BOT_COUNT,
   RUN_SPEED,
   SERVER_TICK_HZ,
   SPAWN_BAND_WIDTH,
@@ -42,13 +44,40 @@ const CROSSHAIR_PALETTE: number[] = [
   0xffffff, // white (fallback for the 12th+ player)
 ]
 
+// Bot wandering cadence: how many server ticks before flipping between
+// walk and idle. Tuned at 30 Hz — original Phase 1 used 40-200 at 60 FPS,
+// so we halve to keep the same wall-clock duration.
+const BOT_MIN_TICK = 20
+const BOT_MAX_TICK = 100
+
+// Vertical placement: the host gets the topmost spawn y; every other zombie
+// (players + bots) spawns below it. Top limit is two fifths of the world
+// height, so the whole lineup fits in the bottom three fifths of the screen.
+const HOST_SPAWN_Y = WORLD_HEIGHT * (2 / 5)
+const OTHERS_SPAWN_Y_MIN = HOST_SPAWN_Y + 30
+const OTHERS_SPAWN_Y_MAX = WORLD_HEIGHT * 0.9
+
+interface BotInternalState extends BotState {
+  canMove: boolean
+  countTick: number
+}
+
 // Per-room state. Owned and instantiated by RoomRegistry; not a Nest provider.
 export class GameRoomService {
   private readonly playerOrder: string[] = []
   private readonly players = new Map<string, PlayerState>()
   private readonly inputs = new Map<string, InputPayload>()
+  private bots: BotInternalState[] = []
   private status: RoomStatus = 'waiting'
   private static readonly TICK_SCALE = 60 / SERVER_TICK_HZ
+
+  // Test hook: injected RNG so spawn/tick are deterministic in unit tests.
+  // Defaults to Math.random in production.
+  private rng: () => number = Math.random
+
+  setRngForTest(rng: () => number): void {
+    this.rng = rng
+  }
 
   addPlayer(id: string): void {
     if (this.playerOrder.includes(id)) return
@@ -89,9 +118,11 @@ export class GameRoomService {
     this.playerOrder.forEach((id, i) => {
       this.players.set(id, this.spawnPlayer(id, i))
     })
+    this.spawnBots()
     this.status = 'running'
     return {
       players: [...this.players.values()],
+      bots: this.snapshotBots(),
       arrivalLineX: ARRIVAL_LINE_X,
     }
   }
@@ -128,10 +159,14 @@ export class GameRoomService {
       if (player.x < 0) player.x = 0
       if (player.x > WORLD_WIDTH) player.x = WORLD_WIDTH
     }
+    this.tickBots()
   }
 
   snapshotState(): StatePayload {
-    return { players: [...this.players.values()].map((p) => ({ ...p })) }
+    return {
+      players: [...this.players.values()].map((p) => ({ ...p })),
+      bots: this.snapshotBots(),
+    }
   }
 
   // Convenience method: tick + arrival-line check, used by the gateway loop.
@@ -187,7 +222,13 @@ export class GameRoomService {
 
     shooter.bulletsRemaining -= 1
 
-    const candidates = [...this.players.values()].filter((p) => p.id !== shooterId)
+    const playerCandidates = [...this.players.values()].filter(
+      (p) => p.id !== shooterId,
+    )
+    // Bots share the same hit-detection pipeline (point-in-AABB on the server
+    // mirrors the client visual). Wasting a bullet on a bot is part of the
+    // gameplay tension: the player loses their only shot for nothing.
+    const candidates = [...playerCandidates, ...this.bots]
     const hit = findNearestHit(pointer, candidates, scale)
     if (hit) {
       hit.isAlive = false
@@ -206,17 +247,76 @@ export class GameRoomService {
     this.status = 'waiting'
     this.players.clear()
     this.inputs.clear()
+    this.bots = []
     return true
   }
 
+  // Test-only helper for asserting bot-related behavior without seeding RNG.
+  botsForTest(): readonly BotState[] {
+    return this.bots
+  }
+
+  private spawnBots(): void {
+    this.bots = []
+    for (let i = 0; i < BOT_COUNT; i++) {
+      const cycleRange = BOT_MAX_TICK - BOT_MIN_TICK
+      this.bots.push({
+        id: `bot-${i}`,
+        type: TYPES[i % TYPES.length]!,
+        x: this.spawnX(),
+        y: this.spawnOtherY(),
+        animation: 'idle',
+        isAlive: true,
+        canMove: false,
+        countTick: Math.floor(this.rng() * cycleRange) + BOT_MIN_TICK,
+      })
+    }
+  }
+
+  private spawnX(): number {
+    return SPAWN_BAND_X + this.rng() * SPAWN_BAND_WIDTH
+  }
+
+  private spawnOtherY(): number {
+    return OTHERS_SPAWN_Y_MIN + this.rng() * (OTHERS_SPAWN_Y_MAX - OTHERS_SPAWN_Y_MIN)
+  }
+
+  private tickBots(): void {
+    for (const bot of this.bots) {
+      if (!bot.isAlive) {
+        bot.animation = 'die'
+        continue
+      }
+      bot.countTick -= 1
+      if (bot.countTick <= 0) {
+        bot.canMove = !bot.canMove
+        const range = BOT_MAX_TICK - BOT_MIN_TICK
+        bot.countTick = Math.floor(this.rng() * range) + BOT_MIN_TICK
+      }
+      if (bot.canMove) {
+        bot.animation = 'walk'
+        bot.x += WALK_SPEED * GameRoomService.TICK_SCALE
+        // Bots are allowed to cross the arrival line and walk off-screen —
+        // it's purely cosmetic, nothing triggers on bot arrival.
+      } else {
+        bot.animation = 'idle'
+      }
+    }
+  }
+
+  private snapshotBots(): BotState[] {
+    return this.bots.map(({ canMove: _c, countTick: _t, ...rest }) => rest)
+  }
+
   private spawnPlayer(id: string, index: number): PlayerState {
-    const x = SPAWN_BAND_X + Math.random() * SPAWN_BAND_WIDTH
-    const y = WORLD_HEIGHT * (0.3 + ((index * 0.13) % 0.6)) + 100
+    const x = this.spawnX()
+    // The host (index 0) anchors the top of the lineup; every other player
+    // spawns somewhere in the band below them.
+    const y = index === 0 ? HOST_SPAWN_Y : this.spawnOtherY()
     return {
       id,
       type: TYPES[index % TYPES.length]!,
       x,
-      // Stagger Y so two players don't perfectly overlap on spawn.
       y,
       animation: 'idle',
       isAlive: true,

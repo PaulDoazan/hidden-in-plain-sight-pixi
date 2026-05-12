@@ -10,6 +10,7 @@ import type {
   ShotFiredPayload,
   StatePayload,
   ZombieAnimation,
+  ZombieState,
   ZombieType,
 } from '@hips/shared'
 
@@ -231,14 +232,7 @@ export class GameScene extends Scene {
     const me = this.game.net.id
     for (const state of payload.players) {
       seen.add(state.id)
-      const existing = this.remoteZombies.get(state.id)
-      if (existing) {
-        existing.applyServerState(state)
-      } else {
-        const z = this.makeZombie(state)
-        this.remoteZombies.set(state.id, z)
-        this.gameLayer.addChild(z)
-      }
+      this.reconcileZombie(state)
       if (state.id === me) {
         this.refreshHud(state)
         // Sync the local crosshair color with the server-assigned palette.
@@ -246,6 +240,10 @@ export class GameScene extends Scene {
       } else {
         this.syncRemoteCrosshair(state)
       }
+    }
+    for (const bot of payload.bots) {
+      seen.add(bot.id)
+      this.reconcileZombie(bot)
     }
     // Remove entities that vanished from the snapshot (covered fully in Task 8;
     // here it's a defensive pass so late-join recovery works correctly).
@@ -260,6 +258,17 @@ export class GameScene extends Scene {
         c.destroy({ children: true })
         this.remoteCrosshairs.delete(id)
       }
+    }
+  }
+
+  private reconcileZombie(state: ZombieState): void {
+    const existing = this.remoteZombies.get(state.id)
+    if (existing) {
+      existing.applyServerState(state)
+    } else {
+      const z = this.makeZombie(state)
+      this.remoteZombies.set(state.id, z)
+      this.gameLayer.addChild(z)
     }
   }
 
@@ -347,10 +356,11 @@ export class GameScene extends Scene {
 
     const me = this.game.net.id
     for (const state of payload.players) {
-      const zombie = this.makeZombie(state)
-      this.remoteZombies.set(state.id, zombie)
-      this.gameLayer.addChild(zombie)
+      this.reconcileZombie(state)
       if (state.id === me) this.refreshHud(state)
+    }
+    for (const bot of payload.bots) {
+      this.reconcileZombie(bot)
     }
 
     // Drain any stale fire flag from the click that triggered Démarrer (or
@@ -408,7 +418,7 @@ export class GameScene extends Scene {
     line.stroke({ width: 3, color: 0xfff700 })
   }
 
-  private makeZombie(state: PlayerState): PlayerZombie {
+  private makeZombie(state: ZombieState): PlayerZombie {
     const zombie = new PlayerZombie({
       type: state.type,
       textures: this.zombieTextures(state.type),

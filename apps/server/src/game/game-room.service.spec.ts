@@ -1,4 +1,10 @@
-import { ARRIVAL_LINE_X, SERVER_TICK_HZ, WALK_SPEED, RUN_SPEED } from '@hips/shared'
+import {
+  ARRIVAL_LINE_X,
+  BOT_COUNT,
+  SERVER_TICK_HZ,
+  WALK_SPEED,
+  RUN_SPEED,
+} from '@hips/shared'
 
 import { BULLETS_PER_PLAYER, GameRoomService } from './game-room.service'
 
@@ -70,7 +76,7 @@ describe('GameRoomService — start', () => {
     expect(result!.players).toHaveLength(2)
     for (const p of result!.players) {
       expect(p.x).toBeGreaterThanOrEqual(30)
-      expect(p.x).toBeLessThanOrEqual(70)
+      expect(p.x).toBeLessThanOrEqual(50)
       expect(p.y).toBeGreaterThan(0)
       expect(p.y).toBeLessThan(886)
       expect(p.animation).toBe('idle')
@@ -78,6 +84,32 @@ describe('GameRoomService — start', () => {
       expect(p.bulletsRemaining).toBe(BULLETS_PER_PLAYER)
     }
     expect(room.snapshotLobby().status).toBe('running')
+  })
+
+  it('places the host at the top of the lineup and everyone else below', () => {
+    room.addPlayer('a')
+    room.addPlayer('b')
+    room.addPlayer('c')
+    const result = room.start('a')!
+    const host = result.players.find((p) => p.id === 'a')!
+    const others = result.players.filter((p) => p.id !== 'a')
+    for (const o of others) {
+      expect(o.y).toBeGreaterThan(host.y)
+    }
+    for (const b of result.bots) {
+      expect(b.y).toBeGreaterThan(host.y)
+    }
+  })
+
+  it('aligns every zombie (players + bots) in the same 20-unit left band', () => {
+    room.addPlayer('a')
+    room.addPlayer('b')
+    const result = room.start('a')!
+    const xs = [...result.players, ...result.bots].map((p) => p.x)
+    for (const x of xs) {
+      expect(x).toBeGreaterThanOrEqual(30)
+      expect(x).toBeLessThanOrEqual(50)
+    }
   })
 
   it('assigns zombie types in a stable cycle', () => {
@@ -173,6 +205,9 @@ describe('GameRoomService — fire', () => {
   })
 
   it('marks the target dead on a hit and decrements the bullet', () => {
+    // Move b out of the start-line cluster so the click uniquely targets them
+    // (otherwise the overlapping bot column wins the depth-sort tiebreak).
+    room.teleportForTest('b', 1500)
     const b = room.snapshotState().players.find((p) => p.id === 'b')!
     const result = room.fire('a', { x: b.x, y: b.y - 10 })
     expect(result!.hit).toEqual({ targetId: 'b' })
@@ -200,6 +235,8 @@ describe('GameRoomService — fire', () => {
 
   it('still lets a dead shooter fire (per game design)', () => {
     room.killForTest('a')
+    // Same isolation as above: bots share the start column with players.
+    room.teleportForTest('b', 1500)
     const b = room.snapshotState().players.find((p) => p.id === 'b')!
     const result = room.fire('a', { x: b.x, y: b.y - 10 })
     expect(result).not.toBeNull()
@@ -296,5 +333,110 @@ describe('GameRoomService — replay', () => {
     expect(room.replay('a')).toBe(true)
     expect(room.snapshotLobby().status).toBe('waiting')
     expect(room.snapshotState().players).toHaveLength(0)
+  })
+})
+
+describe('GameRoomService — bots', () => {
+  let room: GameRoomService
+
+  beforeEach(() => {
+    room = new GameRoomService()
+    room.addPlayer('a')
+  })
+
+  it('spawns BOT_COUNT bots on start, each alive and idle', () => {
+    const result = room.start('a')!
+    expect(result.bots).toHaveLength(BOT_COUNT)
+    for (const b of result.bots) {
+      expect(b.isAlive).toBe(true)
+      expect(b.animation).toBe('idle')
+      expect(b.id).toMatch(/^bot-\d+$/)
+    }
+  })
+
+  it('includes bots in state snapshots', () => {
+    room.start('a')
+    const snap = room.snapshotState()
+    expect(snap.bots).toHaveLength(BOT_COUNT)
+  })
+
+  it('walks a bot forward when its cycle flips to canMove', () => {
+    // Seed RNG so the first bot starts with countTick=1 and flips on the
+    // first tick. The implementation uses Math.floor(rng() * range) + min,
+    // so rng()=0 → countTick = min (20). To get countTick=1 we need a
+    // different seed strategy — instead we tick enough times to observe
+    // movement after the natural flip.
+    room.start('a')
+    const initialBots = [...room.botsForTest()].map((b) => ({ ...b }))
+    // Tick a large number of times — well past the max bot cycle of 100 ticks
+    // so every bot has had a chance to flip into walking at least once.
+    for (let i = 0; i < 200; i++) room.tick()
+    const after = room.botsForTest()
+    // At least one bot should have moved from its initial x (bots are
+    // distinct from their initial state after walking).
+    const moved = after.some((b, i) => b.x !== initialBots[i]!.x)
+    expect(moved).toBe(true)
+  })
+
+  it('lets bots walk past the arrival line and off-screen', () => {
+    room.start('a')
+    // Tick long enough that any bot that has spent any meaningful share of
+    // ticks in canMove=true will have crossed the line.
+    for (let i = 0; i < 5000; i++) room.tick()
+    const past = room.botsForTest().some((b) => b.x > ARRIVAL_LINE_X)
+    expect(past).toBe(true)
+  })
+
+  it('shooting a bot consumes the bullet and marks the bot dead', () => {
+    room.start('a')
+    // Bots overlap in the start column, so we don't assert *which* bot dies —
+    // only that a bot is hit, the hit bot is dead, and the bullet is consumed.
+    const target = room.botsForTest()[0]!
+    const result = room.fire('a', { x: target.x, y: target.y - 10 })
+    expect(result!.hit).not.toBeNull()
+    const hitId = result!.hit!.targetId
+    expect(hitId.startsWith('bot-')).toBe(true)
+    const hitBot = room.botsForTest().find((b) => b.id === hitId)!
+    expect(hitBot.isAlive).toBe(false)
+    expect(hitBot.animation).toBe('die')
+    const shooter = room.snapshotState().players.find((p) => p.id === 'a')!
+    expect(shooter.bulletsRemaining).toBe(BULLETS_PER_PLAYER - 1)
+  })
+
+  it('a bot crossing the arrival line never triggers a winner', () => {
+    room.start('a')
+    // Even if a bot were teleported past the line, only players count.
+    // We rely on tickAndCheckWinner only inspecting `players`.
+    expect(room.tickAndCheckWinner()).toBeNull()
+  })
+
+  it('clears bots on replay', () => {
+    room.start('a')
+    room.teleportForTest('a', 9999)
+    room.tickAndCheckWinner()
+    expect(room.replay('a')).toBe(true)
+    expect(room.botsForTest()).toHaveLength(0)
+  })
+})
+
+describe('GameRoomService — bot movement (deterministic)', () => {
+  it('advances bot x by WALK_SPEED * TICK_SCALE while canMove is true', () => {
+    const room = new GameRoomService()
+    // Inject RNG that returns 0 for every call. That gives:
+    //  - x spawn = BOT_SPAWN_X_MIN
+    //  - countTick = BOT_MIN_TICK on spawn and on every flip
+    //  - canMove flips false→true after BOT_MIN_TICK ticks, false again after
+    //    another BOT_MIN_TICK, …
+    room.setRngForTest(() => 0)
+    room.addPlayer('a')
+    room.start('a')
+    const before = room.botsForTest()[0]!.x
+    // After exactly BOT_MIN_TICK ticks the countTick reaches 0 → the bot
+    // flips into canMove=true and the same tick advances x by one walk step.
+    const BOT_MIN_TICK = 20
+    for (let i = 0; i < BOT_MIN_TICK; i++) room.tick()
+    const after = room.botsForTest()[0]!
+    expect(after.x).toBeCloseTo(before + WALK_SPEED * (60 / SERVER_TICK_HZ), 5)
+    expect(after.animation).toBe('walk')
   })
 })

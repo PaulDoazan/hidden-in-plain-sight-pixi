@@ -24,12 +24,14 @@ export const SERVER_TICK_HZ = 30
 // Movement speeds are expressed in px/frame at a 60 FPS reference, matching
 // the existing client tuning. The server scales them to its tick rate via
 // `pxPerTick = pxPerFrame * (60 / SERVER_TICK_HZ)`.
-export const WALK_SPEED = 1
-export const RUN_SPEED = 2.5
+export const WALK_SPEED = 0.8
+export const RUN_SPEED = 2.2
 
-// Spawn positions: every player spawns somewhere in this band on the x axis.
+// Spawn positions: every zombie (players + bots) spawns in this narrow x band
+// on the left edge. The 20-unit width gives enough jitter to avoid a perfectly
+// straight line without breaking the "lined up at the start" feel.
 export const SPAWN_BAND_X = 30
-export const SPAWN_BAND_WIDTH = 40
+export const SPAWN_BAND_WIDTH = 20
 
 // ─── Zombie + game-state types ────────────────────────────────────────────
 
@@ -55,13 +57,7 @@ export interface ZombieState {
 
 // ─── Socket protocol ──────────────────────────────────────────────────────
 
-export interface PlayerState {
-  id: string
-  type: ZombieType
-  x: number
-  y: number
-  animation: ZombieAnimation
-  isAlive: boolean
+export interface PlayerState extends ZombieState {
   bulletsRemaining: number
   // Per-player crosshair color, picked from a fixed palette at spawn time.
   color: number
@@ -69,6 +65,14 @@ export interface PlayerState {
   // render every other player's crosshair.
   pointer: { x: number; y: number }
 }
+
+// Server-driven background zombies — the "hide among them" camouflage of the
+// original game. Visually indistinguishable from players: same sprites, same
+// walk/idle animations. No crosshair, no pointer, no bullets.
+export type BotState = ZombieState
+
+// Number of background bots spawned at game start.
+export const BOT_COUNT = 20
 
 export type RoomStatus = 'waiting' | 'running' | 'ended'
 
@@ -92,11 +96,13 @@ export interface LobbyStatePayload {
 
 export interface GameStartedPayload {
   players: PlayerState[]
+  bots: BotState[]
   arrivalLineX: number
 }
 
 export interface StatePayload {
   players: PlayerState[]
+  bots: BotState[]
 }
 
 export interface ShotFiredPayload {

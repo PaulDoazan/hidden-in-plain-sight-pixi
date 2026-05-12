@@ -1,4 +1,4 @@
-import type { PlayerState } from '@hips/shared'
+import type { ZombieState } from '@hips/shared'
 
 import { Zombie, type ZombieDeps } from './Zombie'
 
@@ -10,7 +10,7 @@ export class PlayerZombie extends Zombie {
     super(deps)
   }
 
-  applyServerState(state: PlayerState): void {
+  applyServerState(state: ZombieState): void {
     this.x = state.x
     this.y = state.y
     if (state.isAlive !== this.isAlive) {
