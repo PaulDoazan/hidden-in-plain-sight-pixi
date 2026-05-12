@@ -20,6 +20,7 @@ import { BloodSplat } from '../entities/BloodSplat'
 import { Crosshair } from '../entities/Crosshair'
 import { FireShot } from '../entities/FireShot'
 import { PlayerZombie } from '../entities/PlayerZombie'
+import type { Layout } from '../systems/Layout'
 import { WaitingRoomOverlay } from '../ui/WaitingRoomOverlay'
 
 import { EndScene } from './EndScene'
@@ -29,6 +30,8 @@ export class GameScene extends Scene {
   private bgLayer!: Container
   private gameLayer!: Container
   private effectsLayer!: Container
+  private bgSprite: Sprite | null = null
+  private arrivalLine: Graphics | null = null
   private crosshair!: Crosshair
   private waitingOverlay: WaitingRoomOverlay | null = null
   private lobbyHandler: ((payload: LobbyStatePayload) => void) | null = null
@@ -133,6 +136,32 @@ export class GameScene extends Scene {
     }
 
     for (const z of this.remoteZombies.values()) z.zIndex = z.y
+  }
+
+  override resize(_layout: Layout): void {
+    const { canvasWidth, canvasHeight, playArea, worldScale, zombieScale } =
+      this.game.layout
+
+    if (this.bgSprite) {
+      this.bgSprite.width = canvasWidth
+      this.bgSprite.height = canvasHeight
+    }
+
+    this.gameLayer?.position.set(playArea.x, playArea.y)
+    this.gameLayer?.scale.set(worldScale)
+
+    if (this.arrivalLine) this.drawArrivalLine()
+
+    // Remote crosshairs live in world space; their inverse scale keeps their
+    // on-screen size constant across viewports.
+    const inv = 1 / worldScale
+    for (const c of this.remoteCrosshairs.values()) c.scale.set(inv)
+
+    // Every zombie is built with the per-viewport zombieScale; refresh them
+    // so sprites stay legible after a resize.
+    for (const z of this.remoteZombies.values()) z.scale.set(zombieScale)
+
+    this.waitingOverlay?.resize(canvasWidth, canvasHeight)
   }
 
   private onShotFired(payload: ShotFiredPayload): void {
@@ -280,6 +309,7 @@ export class GameScene extends Scene {
     bg1.width = canvasWidth
     bg1.height = canvasHeight
     this.bgLayer.addChild(bg1)
+    this.bgSprite = bg1
   }
 
   private showWaitingOverlay(): void {
@@ -358,9 +388,13 @@ export class GameScene extends Scene {
   }
 
   private drawArrivalLine(): void {
+    if (!this.arrivalLine) {
+      this.arrivalLine = new Graphics()
+      this.gameLayer.addChild(this.arrivalLine)
+    }
     const { canvasHeight, playArea, worldScale } = this.game.layout
     const bottomWorldY = (canvasHeight - playArea.y) / worldScale
-    const line = new Graphics()
+    const line = this.arrivalLine.clear()
     const dashHeight = 14
     const gap = 8
     let y = ARRIVAL_LINE_TOP_Y
@@ -372,7 +406,6 @@ export class GameScene extends Scene {
       y += dashHeight + gap
     }
     line.stroke({ width: 3, color: 0xfff700 })
-    this.gameLayer.addChild(line)
   }
 
   private makeZombie(state: PlayerState): PlayerZombie {

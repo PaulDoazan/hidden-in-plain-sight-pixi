@@ -11,11 +11,32 @@ const HELP_LINES = [
 ]
 
 export class HelpOverlay extends Container {
+  private width_: number
+  private height_: number
+  private readonly onClose: () => void
+
   constructor(layoutWidth: number, layoutHeight: number, onClose: () => void) {
     super()
+    this.width_ = layoutWidth
+    this.height_ = layoutHeight
+    this.onClose = onClose
+    this.rebuild()
+  }
+
+  resize(width: number, height: number): void {
+    this.width_ = width
+    this.height_ = height
+    this.rebuild()
+  }
+
+  private rebuild(): void {
+    this.removeChildren().forEach((c) => c.destroy({ children: true }))
+
+    const w = this.width_
+    const h = this.height_
 
     const dim = new Graphics()
-      .rect(0, 0, layoutWidth, layoutHeight)
+      .rect(0, 0, w, h)
       .fill({ color: 0x000000, alpha: 0.92 })
     this.addChild(dim)
 
@@ -24,7 +45,7 @@ export class HelpOverlay extends Container {
       style: { fill: 0xfff700, fontSize: 36, fontFamily: 'Space Mono, monospace' },
     })
     title.anchor.set(0.5)
-    title.position.set(layoutWidth / 2, layoutHeight / 2 - 160)
+    title.position.set(w / 2, h / 2 - 160)
     this.addChild(title)
 
     HELP_LINES.forEach((line, i) => {
@@ -33,12 +54,12 @@ export class HelpOverlay extends Container {
         style: { fill: 0xffffff, fontSize: 22, fontFamily: 'Space Mono, monospace' },
       })
       text.anchor.set(0.5)
-      text.position.set(layoutWidth / 2, layoutHeight / 2 - 80 + i * 36)
+      text.position.set(w / 2, h / 2 - 80 + i * 36)
       this.addChild(text)
     })
 
-    const close = new Button({ label: 'Fermer', onClick: onClose })
-    close.position.set(layoutWidth / 2, layoutHeight / 2 + 160)
+    const close = new Button({ label: 'Fermer', onClick: this.onClose })
+    close.position.set(w / 2, h / 2 + 160)
     this.addChild(close)
   }
 }

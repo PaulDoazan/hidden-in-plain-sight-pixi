@@ -7,6 +7,7 @@ import type {
 } from '@hips/shared'
 
 import type { Game } from '../app/Game'
+import type { Layout } from '../systems/Layout'
 import { Button } from '../ui/Button'
 import { HelpOverlay } from '../ui/HelpOverlay'
 import { JoinRoomOverlay } from '../ui/JoinRoomOverlay'
@@ -22,6 +23,11 @@ export interface RoomSceneParams {
 export class HomeScene extends Scene {
   private helpOverlay: HelpOverlay | null = null
   private joinOverlay: JoinRoomOverlay | null = null
+  private bg!: Graphics
+  private title!: Text
+  private createBtn!: Button
+  private joinBtn!: Button
+  private helpBtn!: Button
   private roomCreatedHandler: ((payload: RoomCreatedPayload) => void) | null = null
   private roomJoinedHandler: ((payload: RoomJoinedPayload) => void) | null = null
   private roomJoinFailedHandler: ((payload: RoomJoinFailedPayload) => void) | null =
@@ -32,42 +38,38 @@ export class HomeScene extends Scene {
   }
 
   async onEnter(): Promise<void> {
-    const { canvasWidth, canvasHeight } = this.game.layout
+    this.bg = new Graphics()
+    this.addChild(this.bg)
 
-    const bg = new Graphics().rect(0, 0, canvasWidth, canvasHeight).fill({ color: 0x1a2332 })
-    this.addChild(bg)
-
-    const title = new Text({
+    this.title = new Text({
       text: 'Hidden in Plain Sight',
       style: { fill: 0xfff700, fontSize: 56, fontFamily: 'Space Mono, monospace' },
     })
-    title.anchor.set(0.5)
-    title.position.set(canvasWidth / 2, canvasHeight / 2 - 160)
-    this.addChild(title)
+    this.title.anchor.set(0.5)
+    this.addChild(this.title)
 
-    const createBtn = new Button({
+    this.createBtn = new Button({
       label: 'Créer une partie',
       width: 280,
       onClick: () => this.onCreate(),
     })
-    createBtn.position.set(canvasWidth / 2, canvasHeight / 2 - 30)
-    this.addChild(createBtn)
+    this.addChild(this.createBtn)
 
-    const joinBtn = new Button({
+    this.joinBtn = new Button({
       label: 'Rejoindre une partie',
       width: 280,
       onClick: () => this.openJoinDialog(),
     })
-    joinBtn.position.set(canvasWidth / 2, canvasHeight / 2 + 50)
-    this.addChild(joinBtn)
+    this.addChild(this.joinBtn)
 
-    const helpBtn = new Button({
+    this.helpBtn = new Button({
       label: 'Aide',
       width: 280,
       onClick: () => this.openHelp(),
     })
-    helpBtn.position.set(canvasWidth / 2, canvasHeight / 2 + 130)
-    this.addChild(helpBtn)
+    this.addChild(this.helpBtn)
+
+    this.layout()
 
     this.game.net.connect()
 
@@ -100,6 +102,22 @@ export class HomeScene extends Scene {
   }
 
   update(_delta: number): void {}
+
+  override resize(_layout: Layout): void {
+    this.layout()
+    const { canvasWidth, canvasHeight } = this.game.layout
+    this.joinOverlay?.resize(canvasWidth, canvasHeight)
+    this.helpOverlay?.resize(canvasWidth, canvasHeight)
+  }
+
+  private layout(): void {
+    const { canvasWidth, canvasHeight } = this.game.layout
+    this.bg.clear().rect(0, 0, canvasWidth, canvasHeight).fill({ color: 0x1a2332 })
+    this.title.position.set(canvasWidth / 2, canvasHeight / 2 - 160)
+    this.createBtn.position.set(canvasWidth / 2, canvasHeight / 2 - 30)
+    this.joinBtn.position.set(canvasWidth / 2, canvasHeight / 2 + 50)
+    this.helpBtn.position.set(canvasWidth / 2, canvasHeight / 2 + 130)
+  }
 
   private onCreate(): void {
     this.game.net.emit('create-room')

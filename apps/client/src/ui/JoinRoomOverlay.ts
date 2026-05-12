@@ -20,41 +20,92 @@ export class JoinRoomOverlay extends Container {
   private readonly input: HTMLInputElement
   private readonly errorText: Text
   private readonly opts: JoinRoomOverlayOptions
+  private readonly dim: Graphics
+  private readonly title: Text
+  private readonly promptText: Text
+  private readonly validateBtn: Button
+  private readonly cancelBtn: Button
+  private width_: number
+  private height_: number
 
   constructor(opts: JoinRoomOverlayOptions) {
     super()
     this.opts = opts
+    this.width_ = opts.width
+    this.height_ = opts.height
 
-    const dim = new Graphics()
-      .rect(0, 0, opts.width, opts.height)
-      .fill({ color: 0x000000, alpha: 0.85 })
-    this.addChild(dim)
+    this.dim = new Graphics()
+    this.addChild(this.dim)
 
-    const title = new Text({
+    this.title = new Text({
       text: 'Rejoindre une partie',
       style: { fill: 0xfff700, fontSize: 32, fontFamily: 'Space Mono, monospace' },
     })
-    title.anchor.set(0.5)
-    title.position.set(opts.width / 2, opts.height / 2 - 110)
-    this.addChild(title)
+    this.title.anchor.set(0.5)
+    this.addChild(this.title)
 
-    const label = new Text({
+    this.promptText = new Text({
       text: 'Entre le code à 6 caractères',
       style: { fill: 0xffffff, fontSize: 18, fontFamily: 'Space Mono, monospace' },
     })
-    label.anchor.set(0.5)
-    label.position.set(opts.width / 2, opts.height / 2 - 60)
-    this.addChild(label)
+    this.promptText.anchor.set(0.5)
+    this.addChild(this.promptText)
 
     this.input = document.createElement('input')
     this.input.type = 'text'
     this.input.maxLength = CODE_LENGTH
     this.input.autocomplete = 'off'
     this.input.spellcheck = false
+    this.input.addEventListener('keydown', this.onInputKey)
+    this.input.addEventListener('input', this.onInputChange)
+    document.body.appendChild(this.input)
+    // Defer focus by one tick so the click that opened the overlay doesn't
+    // also fire mouseup-induced blur on some browsers.
+    setTimeout(() => this.input.focus(), 0)
+
+    this.errorText = new Text({
+      text: '',
+      style: { fill: 0xff5555, fontSize: 16, fontFamily: 'Space Mono, monospace' },
+    })
+    this.errorText.anchor.set(0.5)
+    this.addChild(this.errorText)
+
+    this.validateBtn = new Button({
+      label: 'Valider',
+      onClick: () => this.submit(),
+    })
+    this.addChild(this.validateBtn)
+
+    this.cancelBtn = new Button({
+      label: 'Annuler',
+      onClick: () => opts.onCancel(),
+    })
+    this.addChild(this.cancelBtn)
+
+    this.layout()
+  }
+
+  resize(width: number, height: number): void {
+    this.width_ = width
+    this.height_ = height
+    this.layout()
+  }
+
+  private layout(): void {
+    const w = this.width_
+    const h = this.height_
+
+    this.dim.clear().rect(0, 0, w, h).fill({ color: 0x000000, alpha: 0.85 })
+    this.title.position.set(w / 2, h / 2 - 110)
+    this.promptText.position.set(w / 2, h / 2 - 60)
+    this.errorText.position.set(w / 2, h / 2 + 30)
+    this.validateBtn.position.set(w / 2 - 110, h / 2 + 90)
+    this.cancelBtn.position.set(w / 2 + 110, h / 2 + 90)
+
     this.input.style.cssText = [
       'position: fixed',
-      `left: ${opts.width / 2 - 120}px`,
-      `top: ${opts.height / 2 - 25}px`,
+      `left: ${w / 2 - 120}px`,
+      `top: ${h / 2 - 25}px`,
       'width: 240px',
       'height: 50px',
       'font: 32px/50px "Space Mono", monospace',
@@ -72,34 +123,6 @@ export class JoinRoomOverlay extends Container {
       'user-select: text',
       '-webkit-user-select: text',
     ].join('; ')
-    this.input.addEventListener('keydown', this.onInputKey)
-    this.input.addEventListener('input', this.onInputChange)
-    document.body.appendChild(this.input)
-    // Defer focus by one tick so the click that opened the overlay doesn't
-    // also fire mouseup-induced blur on some browsers.
-    setTimeout(() => this.input.focus(), 0)
-
-    this.errorText = new Text({
-      text: '',
-      style: { fill: 0xff5555, fontSize: 16, fontFamily: 'Space Mono, monospace' },
-    })
-    this.errorText.anchor.set(0.5)
-    this.errorText.position.set(opts.width / 2, opts.height / 2 + 30)
-    this.addChild(this.errorText)
-
-    const validate = new Button({
-      label: 'Valider',
-      onClick: () => this.submit(),
-    })
-    validate.position.set(opts.width / 2 - 110, opts.height / 2 + 90)
-    this.addChild(validate)
-
-    const cancel = new Button({
-      label: 'Annuler',
-      onClick: () => opts.onCancel(),
-    })
-    cancel.position.set(opts.width / 2 + 110, opts.height / 2 + 90)
-    this.addChild(cancel)
   }
 
   setError(reason: RoomJoinFailReason): void {

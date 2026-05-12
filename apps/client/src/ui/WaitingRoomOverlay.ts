@@ -13,17 +13,54 @@ export interface WaitingRoomOverlayOptions {
 }
 
 export class WaitingRoomOverlay extends Container {
-  private readonly count: Text
-  private startBtn: Button | null = null
-  private hostHint: Text | null = null
-  private copyBtn: IconButton | null = null
+  private width_: number
+  private height_: number
+  private playerCount: number
+  private isHost_: boolean
+  private readonly code: string | null
+  private readonly onStart: () => void
   private copyResetTimer: ReturnType<typeof setTimeout> | null = null
+  private copyBtn: IconButton | null = null
+  private copyShowingCheck = false
 
-  constructor(private readonly opts: WaitingRoomOverlayOptions) {
+  constructor(opts: WaitingRoomOverlayOptions) {
     super()
+    this.width_ = opts.width
+    this.height_ = opts.height
+    this.playerCount = opts.playerCount
+    this.isHost_ = opts.isHost
+    this.code = opts.code
+    this.onStart = opts.onStart
+    this.rebuild()
+  }
+
+  setPlayerCount(n: number): void {
+    if (n === this.playerCount) return
+    this.playerCount = n
+    this.rebuild()
+  }
+
+  setHost(isHost: boolean): void {
+    if (isHost === this.isHost_) return
+    this.isHost_ = isHost
+    this.rebuild()
+  }
+
+  resize(width: number, height: number): void {
+    this.width_ = width
+    this.height_ = height
+    this.rebuild()
+  }
+
+  private rebuild(): void {
+    this.removeChildren().forEach((c) => c.destroy({ children: true }))
+    this.copyBtn = null
+
+    const w = this.width_
+    const h = this.height_
 
     const dim = new Graphics()
-      .rect(0, 0, opts.width, opts.height)
+      .rect(0, 0, w, h)
       .fill({ color: 0x000000, alpha: 0.85 })
     this.addChild(dim)
 
@@ -32,20 +69,20 @@ export class WaitingRoomOverlay extends Container {
       style: { fill: 0xfff700, fontSize: 36, fontFamily: 'Space Mono, monospace' },
     })
     title.anchor.set(0.5)
-    title.position.set(opts.width / 2, opts.height / 2 - 140)
+    title.position.set(w / 2, h / 2 - 140)
     this.addChild(title)
 
-    if (opts.code) {
+    if (this.code) {
       const codeLabel = new Text({
         text: 'Code de la partie',
         style: { fill: 0xaaaaaa, fontSize: 14, fontFamily: 'Space Mono, monospace' },
       })
       codeLabel.anchor.set(0.5)
-      codeLabel.position.set(opts.width / 2, opts.height / 2 - 100)
+      codeLabel.position.set(w / 2, h / 2 - 100)
       this.addChild(codeLabel)
 
       const codeText = new Text({
-        text: opts.code,
+        text: this.code,
         style: {
           fill: 0xfff700,
           fontSize: 44,
@@ -54,77 +91,45 @@ export class WaitingRoomOverlay extends Container {
         },
       })
       codeText.anchor.set(0.5)
-      // Shift the code slightly left so the copy icon sits flush to its right.
-      codeText.position.set(opts.width / 2 - 24, opts.height / 2 - 60)
+      codeText.position.set(w / 2 - 24, h / 2 - 60)
       this.addChild(codeText)
 
+      const code = this.code
       const copyBtn = new IconButton({
         size: 40,
-        initialIcon: 'copy',
-        onClick: () => void this.copyCode(opts.code as string),
+        initialIcon: this.copyShowingCheck ? 'check' : 'copy',
+        onClick: () => void this.copyCode(code),
       })
-      copyBtn.position.set(
-        opts.width / 2 - 24 + codeText.width / 2 + 32,
-        opts.height / 2 - 60,
-      )
+      copyBtn.position.set(w / 2 - 24 + codeText.width / 2 + 32, h / 2 - 60)
       this.addChild(copyBtn)
       this.copyBtn = copyBtn
     }
 
-    this.count = new Text({
-      text: this.formatCount(opts.playerCount),
+    const count = new Text({
+      text: this.formatCount(this.playerCount),
       style: { fill: 0xffffff, fontSize: 22, fontFamily: 'Space Mono, monospace' },
     })
-    this.count.anchor.set(0.5)
-    this.count.position.set(opts.width / 2, opts.height / 2 + 10)
-    this.addChild(this.count)
+    count.anchor.set(0.5)
+    count.position.set(w / 2, h / 2 + 10)
+    this.addChild(count)
 
-    if (opts.isHost) this.addStartButton()
-    else this.addNonHostHint()
-  }
-
-  setPlayerCount(n: number): void {
-    this.count.text = this.formatCount(n)
-  }
-
-  setHost(isHost: boolean): void {
-    if (isHost && !this.startBtn) {
-      this.removeNonHostHint()
-      this.addStartButton()
-    } else if (!isHost && this.startBtn) {
-      this.startBtn.destroy({ children: true })
-      this.startBtn = null
-      this.addNonHostHint()
+    if (this.isHost_) {
+      const btn = new Button({ label: 'Démarrer', onClick: this.onStart })
+      btn.position.set(w / 2, h / 2 + 90)
+      this.addChild(btn)
+    } else {
+      const hint = new Text({
+        text: "En attente de l'hôte…",
+        style: { fill: 0xaaaaaa, fontSize: 18, fontFamily: 'Space Mono, monospace' },
+      })
+      hint.anchor.set(0.5)
+      hint.position.set(w / 2, h / 2 + 90)
+      this.addChild(hint)
     }
   }
 
   private formatCount(n: number): string {
     return `${n} joueur${n > 1 ? 's' : ''} connecté${n > 1 ? 's' : ''}`
-  }
-
-  private addStartButton(): void {
-    const btn = new Button({ label: 'Démarrer', onClick: this.opts.onStart })
-    btn.position.set(this.opts.width / 2, this.opts.height / 2 + 90)
-    this.addChild(btn)
-    this.startBtn = btn
-  }
-
-  private addNonHostHint(): void {
-    if (this.hostHint) return
-    const hint = new Text({
-      text: "En attente de l'hôte…",
-      style: { fill: 0xaaaaaa, fontSize: 18, fontFamily: 'Space Mono, monospace' },
-    })
-    hint.anchor.set(0.5)
-    hint.position.set(this.opts.width / 2, this.opts.height / 2 + 90)
-    this.addChild(hint)
-    this.hostHint = hint
-  }
-
-  private removeNonHostHint(): void {
-    if (!this.hostHint) return
-    this.hostHint.destroy()
-    this.hostHint = null
   }
 
   private async copyCode(code: string): Promise<void> {
@@ -153,11 +158,12 @@ export class WaitingRoomOverlay extends Container {
 
   private flashCopySuccess(): void {
     if (!this.copyBtn) return
-    const btn = this.copyBtn
-    btn.setIcon('check')
+    this.copyShowingCheck = true
+    this.copyBtn.setIcon('check')
     if (this.copyResetTimer) clearTimeout(this.copyResetTimer)
     this.copyResetTimer = setTimeout(() => {
-      btn.setIcon('copy')
+      this.copyShowingCheck = false
+      this.copyBtn?.setIcon('copy')
       this.copyResetTimer = null
     }, 1500)
   }

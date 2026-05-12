@@ -1,6 +1,7 @@
 import { Text } from 'pixi.js'
 
 import type { Game } from '../app/Game'
+import type { Layout } from '../systems/Layout'
 import { ProgressBar } from '../ui/ProgressBar'
 
 import { GameScene } from './GameScene'
@@ -8,6 +9,7 @@ import { Scene } from './Scene'
 
 export class LoadingScene extends Scene {
   private bar: ProgressBar | null = null
+  private loadingLabel: Text | null = null
 
   constructor(private readonly game: Game) {
     super()
@@ -16,13 +18,13 @@ export class LoadingScene extends Scene {
   async onEnter(params?: unknown): Promise<void> {
     const { canvasWidth, canvasHeight } = this.game.layout
 
-    const label = new Text({
+    this.loadingLabel = new Text({
       text: 'Chargement…',
       style: { fill: 0xfff700, fontSize: 28, fontFamily: 'Space Mono, monospace' },
     })
-    label.anchor.set(0.5)
-    label.position.set(canvasWidth / 2, canvasHeight / 2 - 40)
-    this.addChild(label)
+    this.loadingLabel.anchor.set(0.5)
+    this.loadingLabel.position.set(canvasWidth / 2, canvasHeight / 2 - 40)
+    this.addChild(this.loadingLabel)
 
     this.bar = new ProgressBar(420, 18)
     this.bar.position.set(canvasWidth / 2, canvasHeight / 2 + 10)
@@ -34,4 +36,10 @@ export class LoadingScene extends Scene {
 
   onExit(): void {}
   update(): void {}
+
+  override resize(_layout: Layout): void {
+    const { canvasWidth, canvasHeight } = this.game.layout
+    this.loadingLabel?.position.set(canvasWidth / 2, canvasHeight / 2 - 40)
+    this.bar?.position.set(canvasWidth / 2, canvasHeight / 2 + 10)
+  }
 }

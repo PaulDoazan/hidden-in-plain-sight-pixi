@@ -24,8 +24,8 @@ export const SERVER_TICK_HZ = 30
 // Movement speeds are expressed in px/frame at a 60 FPS reference, matching
 // the existing client tuning. The server scales them to its tick rate via
 // `pxPerTick = pxPerFrame * (60 / SERVER_TICK_HZ)`.
-export const WALK_SPEED = 0.5
-export const RUN_SPEED = 1.2
+export const WALK_SPEED = 1
+export const RUN_SPEED = 2.5
 
 // Spawn positions: every player spawns somewhere in this band on the x axis.
 export const SPAWN_BAND_X = 30

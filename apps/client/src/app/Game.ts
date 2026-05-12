@@ -17,6 +17,8 @@ export class Game {
   readonly layout: Layout
   readonly net: NetworkManager
 
+  private resizePending = false
+
   constructor(pixi: Application) {
     this.pixi = pixi
     this.stage = new Container()
@@ -37,8 +39,15 @@ export class Game {
     window.addEventListener('resize', this.onResize)
   }
 
+  // Browser resize events fire many times per second while dragging. Coalesce
+  // them to one reflow per animation frame so we don't thrash the scene graph.
   private onResize = () => {
-    this.layout.recompute(window)
-    this.sceneManager.resize(this.layout)
+    if (this.resizePending) return
+    this.resizePending = true
+    requestAnimationFrame(() => {
+      this.resizePending = false
+      this.layout.recompute(window)
+      this.sceneManager.resize(this.layout)
+    })
   }
 }

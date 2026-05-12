@@ -2,6 +2,7 @@ import { Text } from 'pixi.js'
 import type { LobbyStatePayload } from '@hips/shared'
 
 import type { Game } from '../app/Game'
+import type { Layout } from '../systems/Layout'
 import { Button } from '../ui/Button'
 
 import { GameScene } from './GameScene'
@@ -58,6 +59,13 @@ export class EndScene extends Scene {
     const t = Math.min(this.elapsed / 30, 1)
     this.message.alpha = t
     this.message.scale.set(0.4 + t * 0.6)
+  }
+
+  override resize(_layout: Layout): void {
+    const { canvasWidth, canvasHeight } = this.game.layout
+    this.message?.position.set(canvasWidth / 2, canvasHeight / 2 - 60)
+    this.replayBtn?.position.set(canvasWidth / 2, canvasHeight / 2 + 60)
+    this.hint?.position.set(canvasWidth / 2, canvasHeight / 2 + 60)
   }
 
   private onLobbyState(payload: LobbyStatePayload): void {
