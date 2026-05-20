@@ -34,6 +34,7 @@ export default [
         EventListener: 'readonly',
         EventListenerOptions: 'readonly',
         Window: 'readonly',
+        process: 'readonly',
       },
     },
     plugins: {

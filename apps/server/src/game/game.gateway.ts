@@ -18,13 +18,15 @@ import type {
 import { SERVER_TICK_HZ } from '@hips/shared'
 import type { Server, Socket } from 'socket.io'
 
+import { getCorsOrigin } from '../config/cors-origin'
+
 import { GameRoomService } from './game-room.service'
 import { RoomRegistry } from './room-registry.service'
 
 type AppSocket = Socket<ClientToServerEvents, ServerToClientEvents>
 type AppServer = Server<ClientToServerEvents, ServerToClientEvents>
 
-@WebSocketGateway({ cors: { origin: 'http://localhost:5173', credentials: true } })
+@WebSocketGateway({ cors: { origin: getCorsOrigin(), credentials: true } })
 export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(GameGateway.name)
 
