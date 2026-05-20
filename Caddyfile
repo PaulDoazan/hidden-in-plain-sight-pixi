@@ -1,0 +1,12 @@
+{
+	email p.doazan@lehibou.com
+}
+
+api.marche-ou-creve.com {
+	reverse_proxy localhost:3000
+
+	log {
+		output stdout
+		format console
+	}
+}
