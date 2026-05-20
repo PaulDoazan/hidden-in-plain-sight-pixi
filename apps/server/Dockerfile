@@ -21,11 +21,16 @@ FROM deps AS build
 COPY apps/server apps/server
 COPY packages/shared packages/shared
 COPY tsconfig.base.json ./
+RUN pnpm --filter @hips/shared build
 RUN pnpm --filter server build
 
 FROM base AS prod
+ENV NODE_ENV=production
 COPY --from=build /app/apps/server/dist apps/server/dist
 COPY --from=build /app/apps/server/package.json apps/server/
+COPY --from=build /app/apps/server/node_modules apps/server/node_modules
+COPY --from=build /app/packages/shared/dist packages/shared/dist
+COPY --from=build /app/packages/shared/package.json packages/shared/
 COPY --from=build /app/node_modules node_modules
 WORKDIR /app/apps/server
 EXPOSE 3000
