@@ -397,7 +397,346 @@ Trois acteurs : le client qui émet, la gateway qui reçoit et orchestre, le ser
 
 ## 5. Notre Gateway : `game.gateway.ts` ligne par ligne
 
-_À rédiger._
+Maintenant qu'on connaît la théorie, ouvrons le vrai fichier. Tout ce chapitre est une lecture annotée de `apps/server/src/game/game.gateway.ts` — un fichier d'environ 200 lignes qui contient la totalité de la couche réseau du jeu.
+
+### 5.1 Imports et types (lignes 1-28)
+
+`apps/server/src/game/game.gateway.ts:1`
+
+```typescript
+import { Logger } from '@nestjs/common'
+import {
+  ConnectedSocket,
+  MessageBody,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  SubscribeMessage,
+  WebSocketGateway,
+  WebSocketServer,
+} from '@nestjs/websockets'
+import type {
+  ClientToServerEvents,
+  CreateRoomPayload,
+  FirePayload,
+  InputPayload,
+  JoinRoomPayload,
+  ServerToClientEvents,
+} from '@hips/shared'
+import { SERVER_TICK_HZ } from '@hips/shared'
+import type { Server, Socket } from 'socket.io'
+
+import { getCorsOrigin } from '../config/cors-origin'
+
+import { GameRoomService } from './game-room.service'
+import { RoomRegistry } from './room-registry.service'
+
+type AppSocket = Socket<ClientToServerEvents, ServerToClientEvents>
+type AppServer = Server<ClientToServerEvents, ServerToClientEvents>
+```
+
+Les imports racontent déjà l'architecture :
+
+- `@nestjs/websockets` fournit tous les décorateurs et interfaces qu'on a vus au chapitre 4.
+- `@hips/shared` est notre package interne (monorepo pnpm workspaces) qui contient les **types partagés client/serveur** : les payloads (`CreateRoomPayload`, `FirePayload`, etc.) et les contrats d'events (`ClientToServerEvents`, `ServerToClientEvents`). C'est notre source de vérité de l'API WebSocket — modifier la signature d'un event ici fait apparaître l'erreur côté client _et_ côté serveur à la compilation.
+- Les types `AppSocket` et `AppServer` sont des aliases paramétrés par nos deux maps d'events. C'est ce qui rend `socket.emit('room-created', ...)` autocomplet et type-safe — TypeScript connaît la signature exacte de chaque event sortant.
+
+### 5.2 Décorateur de la gateway (ligne 30)
+
+`apps/server/src/game/game.gateway.ts:30`
+
+```typescript
+@WebSocketGateway({ cors: { origin: getCorsOrigin(), credentials: true } })
+export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
+```
+
+Deux choses notables ici :
+
+- **`cors.origin: getCorsOrigin()`** : la fonction lit la variable d'environnement `CORS_ORIGIN` (cf. `apps/server/src/config/cors-origin.ts`). En prod c'est `https://game.marche-ou-creve.com` ; en dev c'est `http://localhost:5173`. Une socket qui arrive avec un autre Origin se voit refuser le handshake — c'est notre première ligne de défense contre les clients hostiles.
+- **`credentials: true`** : autorise le client à envoyer ses cookies. On ne s'en sert pas encore, mais ça nous prépare à une future authentification stateful.
+- **`implements OnGatewayConnection, OnGatewayDisconnect`** : on s'engage à fournir `handleConnection` et `handleDisconnect`. TypeScript râlera si on oublie.
+
+### 5.3 État interne (lignes 32-46)
+
+`apps/server/src/game/game.gateway.ts:32`
+
+```typescript
+private readonly logger = new Logger(GameGateway.name)
+
+@WebSocketServer()
+private readonly server!: AppServer
+
+// Per-room tick loop handles. Each room ticks independently at 30 Hz once
+// its `start` is acknowledged, and is cleared on game-end or empty-room.
+private readonly tickHandles = new Map<string, ReturnType<typeof setInterval>>()
+
+// socketId → roomCode mapping. Populated on create-room / join-room, cleared
+// on disconnect. A socket without an entry here is connected but not yet
+// attached to a room (sitting on HomeScene).
+private readonly socketRooms = new Map<string, string>()
+
+constructor(private readonly registry: RoomRegistry) {}
+```
+
+Trois maps internes portent toute la mémoire de la gateway :
+
+- **`tickHandles`** : pour chaque room en cours de partie, on garde le `setInterval` du tick loop. Quand la partie se termine (ou que la room se vide), on `clearInterval` pour éviter une fuite.
+- **`socketRooms`** : la table inverse "socket → room". Indispensable parce que, sur disconnect ou input, on reçoit la socket mais on doit retrouver la room concernée en O(1).
+- **`registry`** (injecté) : l'annuaire des rooms, partagé entre toutes les méthodes. C'est lui qui détient les `GameRoomService` (cf. chapitre 6).
+
+Pourquoi pas tout mettre dans le service métier ? Parce que `tickHandles` et `socketRooms` sont des **détails d'orchestration réseau** (gérer `setInterval`, mapper sockets à rooms) qui n'ont rien à faire dans la logique de jeu. La séparation se voit déjà.
+
+### 5.4 `handleConnection` (lignes 48-51)
+
+`apps/server/src/game/game.gateway.ts:48`
+
+```typescript
+handleConnection(socket: AppSocket): void {
+  this.logger.log(`connected: ${socket.id}`)
+  // No room assignment yet: client must emit create-room or join-room.
+}
+```
+
+Tu vois ici qu'on **n'attache la socket à aucune room à la connexion**. C'est volontaire : un client peut être connecté au serveur sans encore avoir choisi de partie (il est sur la HomeScene). La connexion logique au jeu se fait par un event explicite (`create-room` ou `join-room`).
+
+### 5.5 `handleDisconnect` (lignes 53-67)
+
+`apps/server/src/game/game.gateway.ts:53`
+
+```typescript
+handleDisconnect(socket: AppSocket): void {
+  this.logger.log(`disconnected: ${socket.id}`)
+  const code = this.socketRooms.get(socket.id)
+  if (!code) return                                  // 👉 socket pas dans une room, rien à nettoyer
+  this.socketRooms.delete(socket.id)
+  const room = this.registry.get(code)
+  if (!room) return                                  // 👉 défense en profondeur : room déjà détruite
+  room.removePlayer(socket.id)
+  this.server.to(code).emit('player-left', { id: socket.id })
+  this.broadcastLobby(code)
+  if (room.isEmpty()) {                              // 👉 dernier joueur parti : cleanup complet
+    this.stopTickLoop(code)
+    this.registry.remove(code)
+  }
+}
+```
+
+C'est ici que se concentrent toutes les invariants de cleanup. Lis attentivement la séquence :
+
+1. Récupérer le code de la room depuis `socketRooms` ; si absent, rien à faire.
+2. Retirer l'entrée de `socketRooms` (la première chose à dépoluer).
+3. Demander au `GameRoomService` de retirer le joueur (`room.removePlayer`).
+4. Notifier les autres joueurs de la room via `player-left` (Socket.IO broadcast scoped to room).
+5. Re-broadcast l'état lobby mis à jour.
+6. Si la room est vide, **arrêter le tick loop** (sinon il continuerait à tourner pour rien) puis **détruire la room** dans le registry.
+
+Remarque que la fonction est tolérante aux états incohérents : si pour une raison quelconque la room a déjà été supprimée (`this.registry.get(code)` retourne `undefined`), on early-return sans crasher. C'est une habitude saine en code réseau — l'ordre des events n'est jamais garanti.
+
+### 5.6 `create-room` (lignes 69-85)
+
+`apps/server/src/game/game.gateway.ts:69`
+
+```typescript
+@SubscribeMessage('create-room')
+onCreateRoom(
+  @ConnectedSocket() socket: AppSocket,
+  @MessageBody() payload: CreateRoomPayload,
+): void {
+  if (this.socketRooms.has(socket.id)) {
+    socket.emit('room-join-failed', { reason: 'already-in-room' })
+    return
+  }
+  const { code, room } = this.registry.create()        // 👉 génère un code unique
+  room.addPlayer(socket.id, payload?.username ?? '')
+  this.socketRooms.set(socket.id, code)
+  void socket.join(code)                                // 👉 Socket.IO room (le mécanisme de broadcast)
+  socket.emit('room-created', { code, lobby: room.snapshotLobby() })
+  this.broadcastLobby(code)
+  this.logger.log(`room ${code} created by ${socket.id}`)
+}
+```
+
+Plusieurs points pédagogiques :
+
+- **Validation explicite** : un socket déjà dans une room ne peut pas en créer une autre. On lui répond par un event d'erreur dédié plutôt que de lever une exception (qui passerait mal le pont WebSocket).
+- **`registry.create()`** retourne à la fois le `code` (six caractères alphanumériques, cf. chapitre 6) et la `room` instance toute fraîche.
+- **`void socket.join(code)`** : c'est ici que la magie Socket.IO opère. La socket est ajoutée à un groupe nommé `code`. Plus tard, `this.server.to(code).emit(...)` ne diffusera qu'aux sockets ayant rejoint ce groupe. Le `void` devant signale qu'on ignore la promesse retournée (Socket.IO la résout immédiatement pour le namespace par défaut).
+- Deux events sont émis : `room-created` directement à la socket créatrice (avec le code à afficher), puis `lobby-state` à toute la room via `broadcastLobby` (cf. lignes 198-202).
+
+### 5.7 `join-room` (lignes 87-107)
+
+`apps/server/src/game/game.gateway.ts:87`
+
+```typescript
+@SubscribeMessage('join-room')
+onJoinRoom(
+  @ConnectedSocket() socket: AppSocket,
+  @MessageBody() payload: JoinRoomPayload,
+): void {
+  if (this.socketRooms.has(socket.id)) {
+    socket.emit('room-join-failed', { reason: 'already-in-room' })
+    return
+  }
+  const code = payload.code.toUpperCase()              // 👉 normalisation : on accepte 'abc123' ou 'ABC123'
+  const room = this.registry.get(code)
+  if (!room) {
+    socket.emit('room-join-failed', { reason: 'not-found' })
+    return
+  }
+  room.addPlayer(socket.id, payload.username ?? '')
+  this.socketRooms.set(socket.id, code)
+  void socket.join(code)
+  socket.emit('room-joined', { code, lobby: room.snapshotLobby() })
+  this.broadcastLobby(code)
+}
+```
+
+Symétrique de `create-room`, mais avec en plus la validation du code. Deux raisons d'échec sont remontées au client : `already-in-room` et `not-found`. C'est plus utile qu'un simple booléen — le client peut afficher un message d'erreur précis.
+
+### 5.8 `start` (lignes 109-118)
+
+`apps/server/src/game/game.gateway.ts:109`
+
+```typescript
+@SubscribeMessage('start')
+onStart(@ConnectedSocket() socket: AppSocket): void {
+  const ctx = this.roomFor(socket)                  // 👉 helper qui retourne { code, room } ou null
+  if (!ctx) return
+  const result = ctx.room.start(socket.id)
+  if (!result) return                                // 👉 silence si le requester n'est pas host
+  this.server.to(ctx.code).emit('game-started', result)
+  this.broadcastLobby(ctx.code)
+  this.startTickLoop(ctx.code)                       // 👉 lance le setInterval qui broadcasta `state`
+}
+```
+
+Le pattern `roomFor(socket)` revient à chaque handler : il abstrait le double lookup `socketRooms` → `registry`. La gateway gère l'orchestration, le service `GameRoomService.start()` (chapitre 6) décide si le démarrage est légitime (seul le host peut lancer, et seulement si on est en `waiting`).
+
+Remarque que le démarrage broadcast à toute la room le `game-started` _avant_ de lancer le tick loop. Sinon le premier `state` arriverait avant que le client ait reçu la liste initiale des bots et le `arrivalLineX`.
+
+### 5.9 `input` (lignes 120-128)
+
+`apps/server/src/game/game.gateway.ts:120`
+
+```typescript
+@SubscribeMessage('input')
+onInput(
+  @ConnectedSocket() socket: AppSocket,
+  @MessageBody() payload: InputPayload,
+): void {
+  const ctx = this.roomFor(socket)
+  if (!ctx) return
+  ctx.room.applyInput(socket.id, payload)
+}
+```
+
+Trois lignes utiles. Voilà ce qu'on appelle un handler "fire and forget" : on enregistre l'input dans la room, et c'est tout. **Aucun broadcast immédiat** : c'est le tick loop qui, à intervalles réguliers, capturera l'effet de cet input dans le `snapshotState` qu'il enverra à tout le monde. Ça décorrèle la fréquence des inputs (potentiellement 60 Hz côté client) de la fréquence des broadcasts (30 Hz côté serveur).
+
+### 5.10 `fire` (lignes 138-158)
+
+`apps/server/src/game/game.gateway.ts:138`
+
+```typescript
+@SubscribeMessage('fire')
+onFire(
+  @ConnectedSocket() socket: AppSocket,
+  @MessageBody() payload: FirePayload,
+): void {
+  const ctx = this.roomFor(socket)
+  if (!ctx) return
+  const result = ctx.room.fire(socket.id, payload.pointer, payload.scale)
+  if (!result) return
+  this.server.to(ctx.code).emit('shot-fired', result)
+  if (result.hit) {
+    // Bots have no entry in the usernames map → usernameFor returns ''.
+    // Only attach `username` when it's a real player so the client can
+    // distinguish "show death banner" from "silent bot kill".
+    const username = ctx.room.usernameFor(result.hit.targetId)
+    this.server.to(ctx.code).emit('player-killed', {
+      id: result.hit.targetId,
+      ...(username ? { username } : {}),
+    })
+  }
+}
+```
+
+`fire` est plus dense que `input` parce qu'il y a deux broadcasts conditionnels :
+
+1. **`shot-fired`** est toujours diffusé si le tir était légal (le retour de `room.fire` peut être null si le joueur n'a plus de balles ou si la partie n'est pas en cours). Ça permet aux autres clients d'afficher l'animation de tir, même quand rien n'est touché.
+2. **`player-killed`** n'est diffusé que si un joueur a été touché, et le username n'est ajouté que si la cible est un vrai joueur (pas un bot). Le commentaire du code explique pourquoi : la bannière de mort ne doit s'afficher que pour les vrais joueurs.
+
+L'astuce `...(username ? { username } : {})` est un spread conditionnel — il ajoute la propriété `username` au payload uniquement si elle a une valeur. C'est plus propre qu'un `if/else` qui dupliquerait la structure.
+
+### 5.11 Le tick loop (lignes 168-189)
+
+`apps/server/src/game/game.gateway.ts:168`
+
+```typescript
+private startTickLoop(code: string): void {
+  if (this.tickHandles.has(code)) return                  // 👉 idempotent : double start = no-op
+  const intervalMs = 1000 / SERVER_TICK_HZ                // 👉 33.33 ms si SERVER_TICK_HZ = 30
+  const handle = setInterval(() => {
+    const room = this.registry.get(code)
+    if (!room) {
+      this.stopTickLoop(code)                             // 👉 room détruite entre deux ticks
+      return
+    }
+    const winner = room.tickAndCheckWinner()
+    this.server.to(code).emit('state', room.snapshotState())
+    if (winner) {
+      this.stopTickLoop(code)
+      this.server.to(code).emit('game-ended', {
+        winnerId: winner.winnerId,
+        winnerUsername: room.usernameFor(winner.winnerId),
+      })
+      this.broadcastLobby(code)
+    }
+  }, intervalMs)
+  this.tickHandles.set(code, handle)
+}
+```
+
+C'est le cœur battant du serveur. Toutes les ~33 ms (à 30 Hz), pour chaque room en cours, on :
+
+1. Avance l'état de la partie d'un tick (`tickAndCheckWinner` qui détecte aussi si quelqu'un a gagné).
+2. Diffuse l'état complet à tous les sockets de la room.
+3. Si quelqu'un a gagné, arrête le tick loop et envoie `game-ended`.
+
+Pourquoi un `setInterval` par room et pas un seul global ? Parce que les rooms démarrent et se terminent à des moments différents. Avoir un timer par room rend le cleanup naturel (`stopTickLoop` est appelé à la fin de partie _ou_ sur disconnect du dernier joueur).
+
+### 5.12 `broadcastLobby` (lignes 198-202)
+
+`apps/server/src/game/game.gateway.ts:198`
+
+```typescript
+private broadcastLobby(code: string): void {
+  const room = this.registry.get(code)
+  if (!room) return
+  this.server.to(code).emit('lobby-state', room.snapshotLobby())
+}
+```
+
+Helper appelé à chaque changement de composition du lobby (joueur qui arrive, qui part, partie qui démarre ou se termine). Le `lobby-state` contient la liste des joueurs (avec leur username et leur statut host) et l'état de la room (`waiting`, `running`, `ended`).
+
+### Récap visuel
+
+```mermaid
+flowchart LR
+  C[Client] -->|create-room/join-room| H1[onCreateRoom/onJoinRoom]
+  H1 --> R[RoomRegistry]
+  R --> GR[GameRoomService]
+  H1 -->|emit room-created/joined<br/>broadcast lobby-state| C
+
+  C -->|start| H2[onStart]
+  H2 --> GR
+  H2 -->|broadcast game-started<br/>startTickLoop| L[setInterval]
+  L -->|broadcast state à 30 Hz| C
+
+  C -->|input/fire| H3[onInput/onFire]
+  H3 --> GR
+  H3 -.->|fire only:<br/>broadcast shot-fired<br/>broadcast player-killed| C
+```
+
+La gateway, en résumé : une petite poignée d'événements entrants, un service métier qu'on appelle, et des broadcasts ciblés par room.
 
 ## 6. Les services métier : RoomRegistry et GameRoom
 
