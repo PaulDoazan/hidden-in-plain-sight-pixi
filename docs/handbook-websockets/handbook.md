@@ -292,7 +292,108 @@ Pour notre jeu (4 joueurs par room, quelques rooms simultanées en pic), on est 
 
 ## 4. NestJS Gateway : la théorie
 
-_À rédiger._
+NestJS est un framework Node.js opinionnant qui structure les applications autour de **modules**, **providers** et **controllers** — un peu comme Angular côté serveur. Pour les WebSockets, NestJS introduit un quatrième concept : la **Gateway**.
+
+### Qu'est-ce qu'une Gateway
+
+Une Gateway est l'équivalent WebSocket d'un Controller HTTP. Là où un controller a des méthodes décorées par `@Get()`, `@Post()` etc. qui répondent à des routes, une gateway a des méthodes décorées par `@SubscribeMessage()` qui répondent à des **events** WebSocket.
+
+L'idée structurante : la gateway parle "réseau" (sockets, events, broadcasts), et délègue la logique métier à des services qu'elle reçoit par injection de dépendances. C'est exactement le pattern qu'on retrouve dans `GameGateway → RoomRegistry → GameRoomService` dans notre projet (chapitres 5 et 6).
+
+### Le décorateur `@WebSocketGateway()`
+
+`@WebSocketGateway()` marque une classe comme gateway. Il accepte des options :
+
+- `cors: { origin, credentials }` pour contrôler quels origins peuvent se connecter (crucial en prod, on y revient).
+- `namespace: '/admin'` si on veut isoler la gateway dans un sous-canal logique.
+- `transports: ['websocket', 'polling']` pour limiter les transports acceptés.
+
+Par défaut, NestJS utilise l'**adaptateur Socket.IO** : la gateway est exposée via un serveur Socket.IO, pas un WebSocket brut. Il existe d'autres adaptateurs (ws, μWebSockets.js) mais ils sont l'exception.
+
+### Le décorateur `@WebSocketServer()`
+
+`@WebSocketServer()` est un décorateur de propriété qui injecte l'instance `Server` de Socket.IO dans la gateway. C'est par cette instance qu'on broadcast à tous les sockets, à une room, ou qu'on inspecte la liste des sockets connectés.
+
+```typescript
+@WebSocketServer()
+private readonly server!: Server;
+```
+
+Le `!` (non-null assertion) est nécessaire parce que NestJS injecte l'instance après l'instanciation de la classe — TypeScript ne peut pas le savoir statiquement.
+
+### Le décorateur `@SubscribeMessage('event-name')`
+
+`@SubscribeMessage('foo')` marque une méthode comme **handler** pour l'event entrant `'foo'`. La méthode peut recevoir, via d'autres décorateurs :
+
+- `@MessageBody() payload: Foo` — le payload envoyé par le client.
+- `@ConnectedSocket() client: Socket` — la socket cliente qui a émis l'event.
+
+```typescript
+@SubscribeMessage('message')
+onMessage(
+  @MessageBody() payload: { text: string },
+  @ConnectedSocket() client: Socket,
+) { ... }
+```
+
+L'ordre des décorateurs sur les paramètres n'a pas d'importance pour NestJS, mais une convention répandue est `@ConnectedSocket()` d'abord, `@MessageBody()` ensuite — c'est ce qu'on suit dans le projet.
+
+### Les hooks de cycle de vie
+
+Une gateway peut implémenter trois interfaces optionnelles pour recevoir des callbacks aux moments clés :
+
+- `OnGatewayInit` → `afterInit(server)` : appelé une fois quand le serveur Socket.IO est démarré. Utile pour configurer des middlewares Socket.IO.
+- `OnGatewayConnection` → `handleConnection(client)` : appelé à chaque nouvelle connexion.
+- `OnGatewayDisconnect` → `handleDisconnect(client)` : appelé à chaque déconnexion (volontaire ou réseau).
+
+Notre `GameGateway` implémente `OnGatewayConnection` et `OnGatewayDisconnect` — la connexion logue juste, mais la déconnexion fait tout le cleanup (retirer le joueur de la room, broadcaster aux autres, détruire la room si vide).
+
+### Injection de dépendances
+
+Une gateway est un **provider NestJS** comme un autre : elle est déclarée dans un module, et NestJS l'instancie en injectant ses dépendances via le constructeur. Dans notre projet :
+
+```typescript
+constructor(private readonly registry: RoomRegistry) {}
+```
+
+NestJS voit ce constructeur, cherche un provider `RoomRegistry` dans le module courant (`GameModule`), le construit (singleton par défaut), et le passe à la gateway. Pas de `new RoomRegistry()` manuel ; pas de variable globale.
+
+### Micro-exemple générique (pas notre code)
+
+Pour montrer la structure minimale d'une gateway, voici un exemple "chat room" qui ne fait pas partie du projet :
+
+```typescript
+@WebSocketGateway({ cors: { origin: '*' } })
+export class ChatGateway implements OnGatewayConnection {
+  @WebSocketServer() server: Server
+  constructor(private readonly chat: ChatService) {}
+
+  handleConnection(client: Socket) {
+    console.log(`Connected: ${client.id}`)
+  }
+
+  @SubscribeMessage('message')
+  onMessage(@MessageBody() payload: { text: string }, @ConnectedSocket() client: Socket) {
+    const enriched = this.chat.format(payload.text, client.id)
+    this.server.emit('message', enriched)
+  }
+}
+```
+
+Tout est là : décorateur de classe, propriété décorée, constructeur injecté, hook de cycle de vie, handler d'event. Notre `GameGateway` est plus gros mais suit exactement ce squelette — chapitre suivant, on le regarde ligne par ligne.
+
+### Diagramme conceptuel
+
+```mermaid
+flowchart TD
+  C["Client Socket.IO"] -->|emit event| G["Gateway<br/>@SubscribeMessage"]
+  G -->|appelle| S["Service métier<br/>injecté"]
+  S -->|retourne| G
+  G -->|broadcast<br/>via @WebSocketServer| C
+  G -->|broadcast<br/>via @WebSocketServer| C2["Autres clients<br/>de la room"]
+```
+
+Trois acteurs : le client qui émet, la gateway qui reçoit et orchestre, le service métier qui fait le travail. La gateway broadcast le résultat à un ou plusieurs clients via l'instance `Server` injectée par `@WebSocketServer()`.
 
 ## 5. Notre Gateway : `game.gateway.ts` ligne par ligne
 
