@@ -64,6 +64,17 @@ export default [
     },
   },
   {
+    files: ['scripts/**/*.mjs', '*.mjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+      },
+    },
+  },
+  {
     ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '**/.vite/**'],
   },
   prettierConfig,
