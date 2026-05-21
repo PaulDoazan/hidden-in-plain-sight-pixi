@@ -740,7 +740,264 @@ La gateway, en résumé : une petite poignée d'événements entrants, un servic
 
 ## 6. Les services métier : RoomRegistry et GameRoom
 
-_À rédiger._
+La gateway était la "couche réseau". Maintenant on descend d'un cran pour voir la "couche métier" : deux services qui portent toute la logique du jeu, sans aucune référence à Socket.IO. C'est cette séparation qui rend la logique testable, et c'est elle qu'on examine ici.
+
+### 6.1 Pourquoi séparer ?
+
+La règle qu'on suit : **la gateway parle réseau, les services parlent métier**.
+
+- La gateway sait ce qu'est une socket, comment broadcaster à une room, comment gérer un `setInterval`.
+- Les services savent ce qu'est un joueur, comment calculer un tick, comment détecter une collision.
+
+Avantages concrets :
+
+- **Testabilité** : `GameRoomService` se teste en pur JavaScript, sans Socket.IO ni serveur HTTP. Tu peux instancier le service, appeler `start()`, simuler des inputs, vérifier l'état — tout ça en mémoire. Le fichier `game-room.service.spec.ts` et `collision.spec.ts` à côté en sont la preuve.
+- **Réutilisabilité** : si demain on veut un mode IA contre IA pour entraîner un modèle, on peut instancier `GameRoomService` sans gateway, le faire tourner en boucle serrée, et observer.
+- **Isolation des changements** : ajouter un event WebSocket touche la gateway ; ajouter une mécanique de jeu touche le service. Les deux évoluent rarement ensemble.
+
+### 6.2 `RoomRegistry` : l'annuaire
+
+`apps/server/src/game/room-registry.service.ts:1`
+
+Le pattern **Registry** est simple : une `Map` qui associe une clé à une instance, plus quelques méthodes pour créer, lire, supprimer. Ici la clé est le code de room (six caractères) et la valeur est une `GameRoomService`.
+
+#### Génération du code
+
+`apps/server/src/game/room-registry.service.ts:8`
+
+```typescript
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+const CODE_LENGTH = 6
+
+function generateCode(): string {
+  let out = ''
+  for (let i = 0; i < CODE_LENGTH; i++) {
+    out += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]
+  }
+  return out
+}
+```
+
+L'alphabet exclut volontairement les caractères ambigus : `0/O`, `1/I/L`. Reste 23 lettres + 7 chiffres = **30 caractères**, élevés à la puissance 6 → environ 729 millions de codes possibles. Suffisant pour ne quasiment jamais avoir de collision.
+
+#### `create()` avec garantie d'unicité
+
+`apps/server/src/game/room-registry.service.ts:23`
+
+```typescript
+create(): { code: string; room: GameRoomService } {
+  let code: string
+  do {
+    code = generateCode()
+  } while (this.rooms.has(code))           // 👉 reroule si collision (très rare)
+  const room = new GameRoomService()
+  this.rooms.set(code, room)
+  return { code, room }
+}
+```
+
+Le `do...while` est défensif : statistiquement on n'entre quasiment jamais dans la deuxième itération avec 30^6 combinaisons, mais ça garantit l'invariant "deux rooms n'ont jamais le même code".
+
+#### Lecture tolérante à la casse
+
+`apps/server/src/game/room-registry.service.ts:33`
+
+```typescript
+get(code: string): GameRoomService | undefined {
+  return this.rooms.get(code.toUpperCase())
+}
+
+remove(code: string): void {
+  this.rooms.delete(code.toUpperCase())
+}
+```
+
+`toUpperCase()` à la lecture pour qu'un utilisateur qui tape `abc123` ou `ABC123` trouve la même room. Combiné au fait que `generateCode()` ne produit que des majuscules, la table est cohérente.
+
+### 6.3 `GameRoomService` : l'état d'une partie
+
+`apps/server/src/game/game-room.service.ts:1`
+
+C'est le fichier le plus dense du serveur (~390 lignes). On va le parcourir par responsabilités, sans tout citer.
+
+#### État interne
+
+`apps/server/src/game/game-room.service.ts:67`
+
+```typescript
+export class GameRoomService {
+  private readonly playerOrder: string[] = []
+  private readonly usernames = new Map<string, string>()
+  private readonly players = new Map<string, PlayerState>()
+  private readonly inputs = new Map<string, InputPayload>()
+  private bots: BotInternalState[] = []
+  private status: RoomStatus = 'waiting'
+  // ...
+}
+```
+
+Cinq structures portent toute la partie :
+
+- **`playerOrder`** : un tableau qui retient l'ordre d'arrivée. Important parce que **le premier joueur est l'host** (`playerOrder[0]`) — c'est lui qui peut lancer la partie ou relancer.
+- **`usernames`** : `socketId → username`. Survit aux cycles start/replay (tu gardes ton nom entre deux parties).
+- **`players`** : `socketId → PlayerState`. Existe uniquement pendant une partie active (clear sur start et replay).
+- **`inputs`** : dernier input reçu par joueur. Le tick le lit pour faire avancer le joueur.
+- **`bots`** : tableau de bots avec leur état interne. Reconstruit à chaque `start()`.
+- **`status`** : `'waiting' | 'running' | 'ended'`. Machine à états explicite qui empêche d'appeler `start()` en cours de partie ou `replay()` avant la fin.
+
+#### `addPlayer` et le username
+
+`apps/server/src/game/game-room.service.ts:90`
+
+```typescript
+addPlayer(id: string, rawUsername = ''): void {
+  if (this.playerOrder.includes(id)) return
+  this.playerOrder.push(id)
+  this.usernames.set(id, this.resolveUsername(rawUsername))
+}
+```
+
+`resolveUsername()` (lignes 134-140) trim, cap à `USERNAME_MAX_LENGTH`, et si la valeur est vide ou égale au placeholder client `"Joueur"`, génère un fallback `"Joueur N"` où N est l'ordre d'arrivée. Détail savoureux qui évite qu'un lobby se retrouve avec quatre "Joueur" indistinguables.
+
+Remarque que **l'unicité n'est pas enforcée** : deux Antoine peuvent être dans la même room. C'est volontaire (le commentaire le précise) — on n'embête pas l'utilisateur si son frère a le même prénom.
+
+#### `start` : créer un univers cohérent
+
+`apps/server/src/game/game-room.service.ts:142`
+
+```typescript
+start(requesterId: string): GameStartedPayload | null {
+  if (this.status !== 'waiting') return null        // 👉 garde d'état
+  if (this.playerOrder.length === 0) return null
+  if (this.playerOrder[0] !== requesterId) return null   // 👉 seul le host peut lancer
+
+  this.players.clear()
+  this.bots = []
+
+  // Build a single shuffled lineup of all entities — every real player
+  // (host included) and every bot — so a real player's spawn position is
+  // indistinguishable from a bot's.
+  type Slot =
+    | { kind: 'player'; id: string; index: number }
+    | { kind: 'bot'; index: number }
+  const slots: Slot[] = []
+  this.playerOrder.forEach((id, i) => {
+    slots.push({ kind: 'player', id, index: i })
+  })
+  for (let i = 0; i < BOT_COUNT; i++) {
+    slots.push({ kind: 'bot', index: i })
+  }
+  this.shuffle(slots)
+  // ...
+}
+```
+
+C'est ici que se joue le **cœur du concept du jeu** : _Hidden in Plain Sight_. On construit un seul tableau qui contient tous les bots **et** tous les vrais joueurs (host inclus), on le mélange (Fisher-Yates, ligne 183), puis on spawn chaque slot à des positions tirées de la même bande verticale.
+
+Conséquence : impossible de distinguer un vrai joueur d'un bot juste à sa position au spawn. C'est exactement ce qu'on veut.
+
+#### Le tick et la machine à états
+
+`apps/server/src/game/game-room.service.ts:201`
+
+```typescript
+tick(): void {
+  if (this.status !== 'running') return
+  for (const player of this.players.values()) {
+    if (!player.isAlive) {
+      player.animation = 'die'
+      continue
+    }
+    const input = this.inputs.get(player.id)
+    const space = input?.keys.space ?? false
+    const shift = input?.keys.shift ?? false
+    if (space && shift) {
+      player.animation = 'run'
+      player.x += RUN_SPEED * GameRoomService.TICK_SCALE
+    } else if (space) {
+      player.animation = 'walk'
+      player.x += WALK_SPEED * GameRoomService.TICK_SCALE
+    } else {
+      player.animation = 'idle'
+    }
+    // Clamp to play area on x; y is fixed (no vertical movement in MVP).
+    if (player.x < 0) player.x = 0
+    if (player.x > WORLD_WIDTH) player.x = WORLD_WIDTH
+  }
+  this.tickBots()
+}
+```
+
+Pour chaque joueur vivant, on lit son dernier input, on choisit son animation, on avance sa position. La constante `TICK_SCALE = 60 / SERVER_TICK_HZ` corrige la vitesse : les constantes de gameplay (`RUN_SPEED`, `WALK_SPEED`) sont définies pour 60 Hz dans `@hips/shared`, mais le serveur tique à 30 Hz — il faut donc multiplier par 2 par tick pour conserver la vitesse en pixels/seconde.
+
+C'est un détail facile à oublier, mais qui aurait été immédiatement visible en jeu (joueurs deux fois trop lents).
+
+#### `fire` et la collision
+
+`apps/server/src/game/game-room.service.ts:270`
+
+```typescript
+fire(
+  shooterId: string,
+  pointer: { x: number; y: number },
+  scale = 1,
+): {
+  shooterId: string
+  origin: { x: number; y: number }
+  hit: { targetId: string } | null
+} | null {
+  if (this.status !== 'running') return null
+  const shooter = this.players.get(shooterId)
+  if (!shooter || shooter.bulletsRemaining <= 0) return null
+
+  shooter.bulletsRemaining -= 1
+
+  const playerCandidates = [...this.players.values()].filter(
+    (p) => p.id !== shooterId,
+  )
+  // Bots share the same hit-detection pipeline (point-in-AABB on the server
+  // mirrors the client visual). Wasting a bullet on a bot is part of the
+  // gameplay tension: the player loses their only shot for nothing.
+  const candidates = [...playerCandidates, ...this.bots]
+  const hit = findNearestHit(pointer, candidates, scale)
+  if (hit) {
+    hit.isAlive = false
+    hit.animation = 'die'
+  }
+  return {
+    shooterId,
+    origin: pointer,
+    hit: hit ? { targetId: hit.id } : null,
+  }
+}
+```
+
+La détection passe par `findNearestHit` (cf. `apps/server/src/game/collision.ts:51`), qui filtre les cibles dont l'AABB contient le point cliqué, puis trie par `y` décroissant (celle dessinée devant gagne, comme dans le rendu client). Trois choses importantes :
+
+- **Le serveur est autoritaire** : ni le client n'est consulté, ni l'angle/la trajectoire ne sont prédits côté joueur. Le serveur reçoit "j'ai cliqué là", calcule, retourne le résultat.
+- **Le tireur est exclu des candidats** : on ne peut pas se tirer dessus.
+- **Les bots et les joueurs partagent le même pipeline** : c'est volontaire (le commentaire le souligne) — gaspiller sa balle sur un bot est _part of the gameplay tension_.
+
+### 6.4 Diagramme de dépendances
+
+```mermaid
+flowchart LR
+  G["GameGateway<br/>(parle réseau)"] -->|injecté| R["RoomRegistry<br/>(annuaire)"]
+  R -->|crée et stocke| GR["GameRoomService<br/>(état d'une partie)"]
+  G -->|appelle directement| GR
+  GR -->|appelle| Col["findNearestHit<br/>(collision.ts)"]
+```
+
+Le `RoomRegistry` est un provider NestJS (`@Injectable()`, singleton), `GameRoomService` n'en est **pas** un — il est instancié à la main par le registry à chaque `create()`. C'est cohérent : on a un seul registry, mais une instance de room par partie active.
+
+### 6.5 Note sur `socket.id` comme identité joueur
+
+Tu as remarqué que partout, l'identité d'un joueur est son `socket.id` (généré par Socket.IO à la connexion). Tant que le joueur reste connecté, c'est fiable. Mais ça implique deux limitations actuelles :
+
+- Pas de **reconnexion logique** : si la socket se ferme et qu'une nouvelle s'ouvre, le serveur voit un nouveau joueur. Le `username` est perdu.
+- Pas de **persistance** : aucune notion de compte, de stats, de skin choisi.
+
+Ces deux points sont notés dans `docs/deployment-plan.md` (section "bonnes pratiques") comme à traiter en Phase 3. Concrètement, ça prendra la forme d'un `playerId` (UUID stable côté client, stocké en localStorage) envoyé en query string du handshake, et stocké côté serveur pour relinker une nouvelle socket à un joueur existant.
 
 ## 7. Les 9 flux du jeu en diagrammes de séquence
 
