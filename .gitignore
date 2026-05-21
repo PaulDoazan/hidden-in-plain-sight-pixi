@@ -27,3 +27,4 @@ pnpm-debug.log*
 
 # Generated handbook
 docs/handbook-websockets/handbook.html
+docs/handbook-websockets/handbook.pdf
