@@ -1001,41 +1001,350 @@ Ces deux points sont notés dans `docs/deployment-plan.md` (section "bonnes prat
 
 ## 7. Les 9 flux du jeu en diagrammes de séquence
 
+Les chapitres 5 et 6 ont décrit les pièces. Ce chapitre les met en mouvement : neuf flux gameplay, chacun avec son diagramme de séquence, qui montrent comment client, gateway, services et autres clients s'enchaînent.
+
 ### 7.1 Connexion d'un client
 
-_À rédiger._
+```mermaid
+sequenceDiagram
+  participant C as Client (navigateur)
+  participant Cad as Caddy
+  participant N as NestJS GameGateway
+  participant R as RoomRegistry
+  C->>Cad: io('https://api.marche-ou-creve.com')<br/>handshake HTTP Upgrade
+  Cad->>N: forward localhost:3000
+  N-->>C: 101 Switching Protocols
+  Note over C,N: Connexion WebSocket établie
+  N->>N: handleConnection(client)
+  C-->>N: (silence) — pas encore d'event applicatif
+  Note over R: Aucune room créée ou modifiée
+```
+
+Côté client (`apps/client/src/systems/NetworkManager.ts:14`), c'est l'appel `io(SERVER_URL, { withCredentials: true })` qui déclenche tout. Côté gateway, `handleConnection` (cf. `game.gateway.ts:48`) **se contente de loguer** — pas d'attache à une room. Tant que le client n'a pas émis `create-room` ou `join-room`, il est connecté mais "flottant" : il peut rester sur la HomeScene indéfiniment sans consommer de mémoire métier.
+
+C'est une distinction utile : **connexion ≠ adhésion à une partie**. Le découplage donne au client la liberté de reconnecter sa socket sans devoir immédiatement rejoindre une room.
 
 ### 7.2 Création / rejoindre une room
 
-_À rédiger._
+```mermaid
+sequenceDiagram
+  participant H as Host
+  participant N as GameGateway
+  participant R as RoomRegistry
+  participant GR as GameRoomService
+  participant J as Joueur 2
+  participant All as Tous les sockets de la room
+
+  H->>N: emit('create-room', { username })
+  N->>R: registry.create()
+  R->>GR: new GameRoomService()
+  R-->>N: { code, room }
+  N->>GR: room.addPlayer(host.id, username)
+  N->>N: socket.join(code) — adhésion Socket.IO room
+  N-->>H: emit('room-created', { code, lobby })
+  N->>All: emit('lobby-state', snapshotLobby)
+
+  Note over J: Plus tard, un autre joueur se connecte
+  J->>N: emit('join-room', { code, username })
+  N->>R: registry.get(code)
+  R-->>N: room
+  N->>GR: room.addPlayer(j.id, username)
+  N->>N: socket.join(code)
+  N-->>J: emit('room-joined', { code, lobby })
+  N->>All: emit('lobby-state', snapshotLobby)
+```
+
+Deux phases symétriques. Côté code :
+
+- `create-room` est géré par `onCreateRoom` (`game.gateway.ts:69`). Il génère un code unique via le registry, instancie la `GameRoomService`, ajoute le joueur, et **fait deux broadcasts différents** : `room-created` ciblé à l'host (avec le code à afficher), `lobby-state` à toute la room (qui ne contient que l'host pour l'instant, mais c'est la même fonction qui marchera quand d'autres arriveront).
+- `join-room` est géré par `onJoinRoom` (`game.gateway.ts:87`). Il valide le code (`registry.get` retourne `undefined` si introuvable, et la gateway répond `room-join-failed` avec `reason: 'not-found'`). Si OK, même séquence : ajout au service, `socket.join(code)`, broadcast.
+
+Le `socket.join(code)` est l'étape qu'on ne voit pas mais qui rend possible tous les futurs `this.server.to(code).emit(...)`. Sans elle, le broadcast serait silencieux pour ce socket.
+
+Le **room code** est normalisé en majuscules à la lecture (`registry.get` fait `code.toUpperCase()`), donc le joueur 2 peut le taper en minuscules — pratique mobile.
 
 ### 7.3 Lancement de partie
 
-_À rédiger._
+```mermaid
+sequenceDiagram
+  participant H as Host
+  participant N as GameGateway
+  participant GR as GameRoomService
+  participant All as Tous les sockets de la room
+
+  H->>N: emit('start')
+  N->>N: roomFor(host) → { code, room }
+  N->>GR: room.start(host.id)
+  GR->>GR: garde d'état (waiting + playerOrder[0]===host)
+  GR->>GR: build slots [players + bots], shuffle, spawn
+  GR->>GR: status = 'running'
+  GR-->>N: { players, bots, arrivalLineX }
+  N->>All: emit('game-started', payload)
+  N->>All: emit('lobby-state', snapshotLobby)
+  N->>N: startTickLoop(code) — setInterval à 30 Hz
+  loop Tous les ~33 ms
+    N->>All: emit('state', snapshotState)
+  end
+```
+
+Le `start` est gardé par trois conditions dans `GameRoomService.start()` (`game-room.service.ts:142`) :
+
+1. La room doit être en `'waiting'` (pas déjà en cours ni terminée).
+2. Il doit y avoir au moins un joueur.
+3. Le requester doit être le host (`playerOrder[0]`).
+
+Si l'un échoue, `start()` retourne `null` et la gateway _ignore silencieusement_. Pas d'event d'erreur dédié — c'est un cas où le client ne devrait jamais arriver (le bouton "Démarrer" n'est visible que pour l'host dans le lobby), donc le silence est volontaire.
+
+L'envoi de `game-started` **précède** le démarrage du tick loop : le client a besoin de connaître la position initiale des bots et la ligne d'arrivée avant de pouvoir interpréter le premier `state` qui arrive ~33 ms plus tard.
+
+C'est aussi à `start()` que se joue le mélange (shuffle Fisher-Yates) des slots joueurs/bots — c'est le moment où _Hidden in Plain Sight_ devient pour de bon ce qu'il est : on ne peut plus distinguer un joueur d'un bot par sa position.
 
 ### 7.4 Input joueur (clic souris → tir)
 
-_À rédiger._
+C'est le flux le plus dense — celui qui définit l'expérience de jeu. Décomposons-le en deux sous-flux : l'envoi continu de la position pointeur (event `input`), et le clic de tir (event `fire`).
+
+#### Envoi continu de la position de souris
+
+```mermaid
+sequenceDiagram
+  participant P as PixiJS (client)
+  participant N as GameGateway
+  participant GR as GameRoomService
+
+  loop Quand la souris bouge ou que les touches changent
+    P->>N: emit('input', { pointer, keys })
+    N->>GR: room.applyInput(socket.id, payload)
+    GR->>GR: this.inputs.set(id, input)<br/>this.players[id].pointer = input.pointer
+  end
+
+  Note over P,GR: Aucun broadcast immédiat —<br/>le tick loop fera le travail
+```
+
+Le handler `onInput` (`game.gateway.ts:120`) est **fire-and-forget** : on enregistre l'input dans la room, on ne broadcast rien. C'est le tick loop qui, à la prochaine tick, lira cet input dans `tick()` (`game-room.service.ts:201`) pour décider de l'animation et de la position du joueur, puis broadcastera le `state` complet à toute la room.
+
+Pourquoi cette indirection ? Pour **décorréler la cadence des inputs de la cadence des broadcasts**. Le client peut émettre des inputs à 60 Hz (fréquence du rendu PixiJS), mais le serveur ne broadcast qu'à 30 Hz. Si on broadcastait à chaque input, on aurait 8 broadcasts par tick pour 4 joueurs — quatre fois trop, sans bénéfice gameplay.
+
+#### Clic souris → tir
+
+```mermaid
+sequenceDiagram
+  participant P as PixiJS (client)
+  participant N as GameGateway
+  participant GR as GameRoomService
+  participant All as Tous les sockets de la room
+
+  P->>N: emit('fire', { pointer, scale })
+  N->>GR: room.fire(shooterId, pointer, scale)
+  GR->>GR: garde d'état + bullets > 0
+  GR->>GR: décrément bulletsRemaining
+  GR->>GR: findNearestHit(pointer, candidates, scale)
+  alt Touché
+    GR->>GR: hit.isAlive = false<br/>hit.animation = 'die'
+  end
+  GR-->>N: { shooterId, origin, hit }
+  N->>All: emit('shot-fired', result)
+  alt result.hit && hit est un vrai joueur
+    N->>All: emit('player-killed', { id, username })
+  end
+```
+
+Deux broadcasts conditionnels :
+
+- **`shot-fired`** est diffusé chaque fois qu'un tir est légal, peu importe s'il touche. Les clients utilisent cet event pour afficher l'animation de tir (flash, son).
+- **`player-killed`** n'est diffusé que si la cible est un vrai joueur (pas un bot). La gateway le détecte en regardant si `usernameFor(targetId)` retourne une chaîne non vide (les bots n'ont pas d'entrée dans la map `usernames`). Le client utilise cet event pour afficher la bannière "X a éliminé Y".
+
+Le `scale` envoyé dans le payload mérite une note : c'est le facteur d'échelle visuel que le shooter applique à ses sprites zombies localement. Le serveur l'utilise dans `aabbFor` (`collision.ts:34`) pour calculer la même boîte de collision que celle qu'on a vue à l'écran. Sans ça, un shooter sur un écran zoomé verrait des zombies plus grands que la hitbox serveur, et ses clics sur les pieds passeraient au travers.
 
 ### 7.5 Boucle de tick serveur
 
-_À rédiger._
+```mermaid
+flowchart TD
+  Start[startTickLoop code] --> SI["setInterval intervalMs = 1000 / SERVER_TICK_HZ"]
+  SI --> Tick[Toutes les 33 ms]
+  Tick --> CheckRoom{Room existe ?}
+  CheckRoom -->|non| Stop[stopTickLoop]
+  CheckRoom -->|oui| Advance["room.tickAndCheckWinner"]
+  Advance --> Snap["snapshotState"]
+  Snap --> Bcast["server.to code .emit 'state'"]
+  Bcast --> Winner{Winner ?}
+  Winner -->|non| Tick
+  Winner -->|oui| Emit["broadcast 'game-ended'"]
+  Emit --> Stop
+```
+
+Le tick loop est défini dans `startTickLoop` (`game.gateway.ts:168`). C'est **un `setInterval` par room** — pas un seul global qui itérerait sur toutes les rooms. Avantages :
+
+- Chaque room démarre et s'arrête à son rythme. Le cleanup (`stopTickLoop`) est appelé naturellement à `game-ended` ou quand le dernier joueur de la room se déconnecte.
+- Pas besoin de gérer un état "rooms actives" séparé du registry.
+
+Inconvénient théorique : à 100 rooms simultanées, on aurait 100 timers, ce qui n'est pas idéal pour le scheduler Node. Mais le t3.micro saturera bien avant en CPU.
+
+Le tick combine `tick()` (avance la simulation : positions, animations, bots) et `checkWinner` (regarde si un joueur a atteint `ARRIVAL_LINE_X`). Tout est encapsulé dans la méthode `tickAndCheckWinner()` (`game-room.service.ts:235`), pour qu'un seul appel suffise à la gateway.
+
+Une subtilité importante : le `state` broadcasté contient **l'état complet de la partie** (tous les joueurs, tous les bots, tous les pointeurs). Pas de delta, pas de diff. C'est volontaire : à 30 Hz et ~4 joueurs, le payload pèse quelques centaines d'octets, et envoyer le full state élimine toute une classe de bugs de désynchro client-serveur. Si un client rate un broadcast (jitter réseau), le suivant repart de zéro.
 
 ### 7.6 Détection de collision
 
-_À rédiger._
+```mermaid
+sequenceDiagram
+  participant N as GameGateway.onFire
+  participant GR as GameRoomService.fire
+  participant Col as findNearestHit (collision.ts)
+
+  N->>GR: fire(shooterId, pointer, scale)
+  GR->>GR: candidates = players (sans shooter) + bots
+  GR->>Col: findNearestHit(pointer, candidates, scale)
+  loop Pour chaque cible vivante
+    Col->>Col: box = aabbFor(target, scale)
+    Col->>Col: contained = isPointInAABB(pointer, box)
+  end
+  Col->>Col: tri par y décroissant<br/>(celle dessinée devant gagne)
+  Col-->>GR: nearest hit (ou null)
+  alt Touché
+    GR->>GR: hit.isAlive = false
+  end
+```
+
+Le calcul de collision vit dans `apps/server/src/game/collision.ts`, séparé du `GameRoomService` parce qu'il n'a aucun état — c'est de la géométrie pure, testable en isolation (cf. `collision.spec.ts`).
+
+Trois fonctions :
+
+- **`isPointInAABB`** (`collision.ts:25`) : test trivial de point dans rectangle.
+- **`aabbFor`** (`collision.ts:34`) : calcule la boîte AABB d'une cible. L'anchor sprite est `(0.5, 1.0)` côté client (le sprite est ancré par les pieds), donc côté serveur on retrouve le rectangle en partant de `(target.x, target.y)` comme les pieds et en remontant.
+- **`findNearestHit`** (`collision.ts:51`) : filtre les cibles vivantes contenant le point, trie par `y` décroissant (le zombie dessiné devant l'emporte, ce qui _match le comportement visuel client_), retourne la première.
+
+Le commentaire dans `aabbFor` est intéressant : `scale` est essentiel pour que la hitbox serveur corresponde exactement à ce que le shooter voit. Sans ce paramètre, un joueur sur un écran qui applique un zoom local cliquerait sur le sprite visible et raterait la hitbox plus petite côté serveur — frustration garantie.
+
+**Le serveur est autoritaire** : aucune prédiction de collision côté client. La séquence est :
+
+1. Le client clique, envoie l'event `fire` au serveur.
+2. Le serveur calcule, met à jour le state.
+3. Le serveur broadcast le `shot-fired` (et éventuellement `player-killed`).
+4. Le client affiche le résultat reçu.
+
+C'est légèrement plus latent qu'une prédiction côté client, mais ça évite toute classe de tricherie : impossible de "se déclarer mort" ou de "déclarer un kill" depuis un client modifié.
 
 ### 7.7 Fin de partie
 
-_À rédiger._
+```mermaid
+sequenceDiagram
+  participant Tick as setInterval (tick loop)
+  participant GR as GameRoomService
+  participant N as GameGateway
+  participant All as Tous les sockets de la room
+
+  Tick->>GR: tickAndCheckWinner()
+  GR->>GR: tick() — avance les joueurs
+  loop Pour chaque joueur vivant
+    GR->>GR: p.x >= ARRIVAL_LINE_X ?
+  end
+  GR->>GR: status = 'ended'
+  GR-->>Tick: { winnerId }
+  Tick->>N: stopTickLoop(code)
+  Tick->>All: emit('game-ended', { winnerId, winnerUsername })
+  Tick->>N: broadcastLobby(code)
+  Note over All: Clients affichent l'écran de victoire
+```
+
+La condition de victoire est simple : **un joueur vivant franchit la ligne d'arrivée** (`ARRIVAL_LINE_X` dans `@hips/shared`). C'est testé à chaque tick dans `tickAndCheckWinner` (`game-room.service.ts:235`), juste après l'avancée des joueurs.
+
+Trois effets de bord enchaînés :
+
+1. `status = 'ended'` — la machine à états passe au statut terminé. Toute tentative de `start()` ou de `fire()` après ça retourne `null`.
+2. La gateway arrête le tick loop (`clearInterval` + `tickHandles.delete`) pour ne plus broadcaster de `state` inutile.
+3. La gateway envoie `game-ended` à toute la room avec l'ID et le username du gagnant. Les clients affichent l'écran "X a gagné !".
+4. Un `broadcastLobby` final met le statut à jour pour quiconque ouvrirait le lobby après la fin.
+
+À ce stade, la room **reste en mémoire** (status `'ended'`), ce qui permet à l'host de relancer une partie via `replay()`. Voir la suite : `replay()` reset les joueurs et bots, repasse le status à `'waiting'`, et le cycle peut redémarrer avec un nouveau `start`.
 
 ### 7.8 Déconnexion brutale
 
-_À rédiger._
+Coupure wifi, fermeture d'onglet, F5, mort de la batterie : tous les cas où une socket disparaît sans crier gare.
+
+```mermaid
+sequenceDiagram
+  participant C as Client (disparu)
+  participant SIO as Couche Socket.IO
+  participant N as GameGateway
+  participant GR as GameRoomService
+  participant All as Autres sockets de la room
+
+  Note over C: Réseau coupé, onglet fermé...
+  SIO->>SIO: ping sans pong → timeout
+  SIO->>N: déclenche handleDisconnect(socket)
+  N->>N: code = socketRooms.get(socket.id)
+  alt Socket pas dans une room
+    N-->>N: return (rien à nettoyer)
+  end
+  N->>N: socketRooms.delete(socket.id)
+  N->>GR: room.removePlayer(socket.id)
+  GR->>GR: enlève des players/inputs/usernames
+  alt Room devient vide hors waiting
+    GR->>GR: status = 'waiting' (reset défensif)
+  end
+  N->>All: emit('player-left', { id })
+  N->>All: emit('lobby-state', snapshotLobby)
+  alt room.isEmpty()
+    N->>N: stopTickLoop(code)
+    N->>N: registry.remove(code)
+  end
+```
+
+Le `handleDisconnect` (`game.gateway.ts:53`) est le **seul endroit du serveur** qui nettoie après un joueur. Il est appelé par Socket.IO chaque fois qu'une socket se ferme, quelle que soit la raison (déconnexion volontaire `socket.disconnect()`, timeout ping/pong, fermeture TCP).
+
+Trois invariants importants y sont maintenus :
+
+1. **`socketRooms` est nettoyé en premier** : si quelque chose échoue plus tard, on n'a pas une socket fantôme qui pointe vers une room qui n'existe plus.
+2. **Le service métier nettoie son propre état** (`removePlayer` enlève le joueur des trois maps internes + reset le status si la room se vide en cours de partie — cf. `game-room.service.ts:106`).
+3. **Si la room devient vide, on stoppe le tick loop ET on supprime la room du registry** — sinon on aurait une fuite de timers et de mémoire.
+
+Détail subtil : le reset défensif du status à `'waiting'` dans `removePlayer` couvre un cas réel. Si l'host de la partie ferme son onglet en plein gameplay, la room passe en `'ended'` ou reste en `'running'` orphelin — et le `start()` suivant serait silencieusement refusé par la garde d'état. Le reset à `'waiting'` quand la room devient vide assure qu'une nouvelle connexion repart d'un état propre.
+
+À aucun moment on n'envoie un event d'erreur — la déconnexion **est** le signal. Les autres joueurs voient `player-left` et savent que ce joueur n'est plus là.
 
 ### 7.9 Cycle de vie complet d'une partie
 
-_À rédiger._
+Pour boucler la partie 1, voici le diagramme d'états qui synthétise tout ce qu'on vient de voir.
+
+```mermaid
+stateDiagram-v2
+  [*] --> WaitingNoPlayers: registry.create()
+  WaitingNoPlayers --> WaitingWithPlayers: addPlayer (create-room ou join-room)
+  WaitingWithPlayers --> WaitingWithPlayers: addPlayer / removePlayer
+  WaitingWithPlayers --> Running: host emit('start')
+  Running --> Running: tick (boucle 30 Hz)<br/>broadcast state
+  Running --> Ended: un joueur franchit ARRIVAL_LINE_X
+  Ended --> WaitingWithPlayers: host emit('replay')
+  Running --> WaitingNoPlayers: dernier joueur déconnecté<br/>(reset défensif)
+  Ended --> WaitingNoPlayers: dernier joueur déconnecté
+  WaitingNoPlayers --> [*]: registry.remove(code)
+```
+
+Les transitions clés :
+
+- **Création** : `registry.create()` instancie une room en état `'waiting'`, vide. Le code est généré.
+- **Premier joueur** : `addPlayer` du host. Il devient `playerOrder[0]`, donc futur démarreur.
+- **Démarrage** : seul l'host peut lancer (`start()` garde le `playerOrder[0]` check). Le shuffle joueurs+bots se joue ici.
+- **Tick** : 30 fois par seconde, le state avance et est broadcasté.
+- **Fin par victoire** : un joueur traverse la ligne d'arrivée, `status = 'ended'`, tick stoppé, `game-ended` broadcasté.
+- **Replay** : l'host peut relancer via `replay()` (`game-room.service.ts:306`) qui repose la room en `'waiting'` en gardant les joueurs présents. Cycle suivant.
+- **Cleanup** : si à n'importe quel moment la room devient vide, le tick loop est stoppé et la room est retirée du registry.
+
+C'est volontairement simple : un état `running`, une seule condition de victoire, un seul flux de cleanup. La gateway en haut, le service au milieu, le tick loop qui pulse — tout ce dont on a besoin pour faire tourner une room de _Hidden in Plain Sight_.
+
+### Synthèse de la Partie 1
+
+À ce stade tu as lu :
+
+1. Pourquoi le WebSocket existe (le polling tue, on a besoin d'une connexion persistante bidirectionnelle).
+2. Comment il se négocie (handshake HTTP qui upgrade, ports 80/443 préservés).
+3. Ce que Socket.IO ajoute par-dessus (rooms, reconnect, events nommés, mais protocole non-interopérable avec du WebSocket brut).
+4. Comment NestJS encapsule tout ça dans une Gateway (décorateurs, hooks, DI).
+5. Notre Gateway concrète (10 lignes par handler, des invariants de cleanup soigneux).
+6. Les services métier (un registry pour les rooms, une room pour la partie, le tout testable sans Socket.IO).
+7. Neuf flux qui couvrent toute la vie d'une room.
+
+La Partie 2 zoome arrière : tout ce qu'on vient de voir tourne au fond d'un container Docker, sur une instance EC2, derrière Caddy, derrière Cloudflare. On y va.
 
 ---
 
