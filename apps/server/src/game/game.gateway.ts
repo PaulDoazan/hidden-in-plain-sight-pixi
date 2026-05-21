@@ -10,6 +10,7 @@ import {
 } from '@nestjs/websockets'
 import type {
   ClientToServerEvents,
+  CreateRoomPayload,
   FirePayload,
   InputPayload,
   JoinRoomPayload,
@@ -66,13 +67,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('create-room')
-  onCreateRoom(@ConnectedSocket() socket: AppSocket): void {
+  onCreateRoom(
+    @ConnectedSocket() socket: AppSocket,
+    @MessageBody() payload: CreateRoomPayload,
+  ): void {
     if (this.socketRooms.has(socket.id)) {
       socket.emit('room-join-failed', { reason: 'already-in-room' })
       return
     }
     const { code, room } = this.registry.create()
-    room.addPlayer(socket.id)
+    room.addPlayer(socket.id, payload?.username ?? '')
     this.socketRooms.set(socket.id, code)
     void socket.join(code)
     socket.emit('room-created', { code, lobby: room.snapshotLobby() })
@@ -95,7 +99,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       socket.emit('room-join-failed', { reason: 'not-found' })
       return
     }
-    room.addPlayer(socket.id)
+    room.addPlayer(socket.id, payload.username ?? '')
     this.socketRooms.set(socket.id, code)
     void socket.join(code)
     socket.emit('room-joined', { code, lobby: room.snapshotLobby() })
@@ -142,7 +146,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!result) return
     this.server.to(ctx.code).emit('shot-fired', result)
     if (result.hit) {
-      this.server.to(ctx.code).emit('player-killed', { id: result.hit.targetId })
+      // Bots have no entry in the usernames map → usernameFor returns ''.
+      // Only attach `username` when it's a real player so the client can
+      // distinguish "show death banner" from "silent bot kill".
+      const username = ctx.room.usernameFor(result.hit.targetId)
+      this.server.to(ctx.code).emit('player-killed', {
+        id: result.hit.targetId,
+        ...(username ? { username } : {}),
+      })
     }
   }
 
@@ -167,7 +178,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.server.to(code).emit('state', room.snapshotState())
       if (winner) {
         this.stopTickLoop(code)
-        this.server.to(code).emit('game-ended', winner)
+        this.server.to(code).emit('game-ended', {
+          winnerId: winner.winnerId,
+          winnerUsername: room.usernameFor(winner.winnerId),
+        })
         this.broadcastLobby(code)
       }
     }, intervalMs)

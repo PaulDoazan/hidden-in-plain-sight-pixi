@@ -3,10 +3,16 @@ import { Container, Graphics, Text } from 'pixi.js'
 import { Button } from './Button'
 import { IconButton } from './IconButton'
 
+export interface WaitingRoomPlayer {
+  username: string
+  isHost: boolean
+  isMe: boolean
+}
+
 export interface WaitingRoomOverlayOptions {
   width: number
   height: number
-  playerCount: number
+  players: WaitingRoomPlayer[]
   isHost: boolean
   code: string | null
   onStart: () => void
@@ -15,7 +21,7 @@ export interface WaitingRoomOverlayOptions {
 export class WaitingRoomOverlay extends Container {
   private width_: number
   private height_: number
-  private playerCount: number
+  private players: WaitingRoomPlayer[]
   private isHost_: boolean
   private readonly code: string | null
   private readonly onStart: () => void
@@ -27,16 +33,16 @@ export class WaitingRoomOverlay extends Container {
     super()
     this.width_ = opts.width
     this.height_ = opts.height
-    this.playerCount = opts.playerCount
+    this.players = opts.players
     this.isHost_ = opts.isHost
     this.code = opts.code
     this.onStart = opts.onStart
     this.rebuild()
   }
 
-  setPlayerCount(n: number): void {
-    if (n === this.playerCount) return
-    this.playerCount = n
+  setPlayers(players: WaitingRoomPlayer[]): void {
+    if (samePlayers(this.players, players)) return
+    this.players = players
     this.rebuild()
   }
 
@@ -106,16 +112,37 @@ export class WaitingRoomOverlay extends Container {
     }
 
     const count = new Text({
-      text: this.formatCount(this.playerCount),
+      text: this.formatCount(this.players.length),
       style: { fill: 0xffffff, fontSize: 22, fontFamily: 'Space Mono, monospace' },
     })
     count.anchor.set(0.5)
     count.position.set(w / 2, h / 2 + 10)
     this.addChild(count)
 
+    // Render the username list under the counter, host first (already sorted
+    // server-side by playerOrder). Host gets a "(hôte)" suffix, the local
+    // player is bolded via a brighter color so each user can spot themselves.
+    const listStartY = h / 2 + 40
+    const lineHeight = 22
+    this.players.forEach((p, i) => {
+      const suffix = p.isHost ? ' (hôte)' : ''
+      const text = new Text({
+        text: `${p.username}${suffix}`,
+        style: {
+          fill: p.isMe ? 0xfff700 : 0xcccccc,
+          fontSize: 16,
+          fontFamily: 'Space Mono, monospace',
+        },
+      })
+      text.anchor.set(0.5)
+      text.position.set(w / 2, listStartY + i * lineHeight)
+      this.addChild(text)
+    })
+
+    const actionsY = listStartY + this.players.length * lineHeight + 40
     if (this.isHost_) {
       const btn = new Button({ label: 'Démarrer', onClick: this.onStart })
-      btn.position.set(w / 2, h / 2 + 90)
+      btn.position.set(w / 2, actionsY)
       this.addChild(btn)
     } else {
       const hint = new Text({
@@ -123,7 +150,7 @@ export class WaitingRoomOverlay extends Container {
         style: { fill: 0xaaaaaa, fontSize: 18, fontFamily: 'Space Mono, monospace' },
       })
       hint.anchor.set(0.5)
-      hint.position.set(w / 2, h / 2 + 90)
+      hint.position.set(w / 2, actionsY)
       this.addChild(hint)
     }
   }
@@ -175,4 +202,21 @@ export class WaitingRoomOverlay extends Container {
     }
     super.destroy(options)
   }
+}
+
+// Cheap equality check on the player list — short enough that field-by-field
+// comparison beats hashing or JSON.stringify. Skips a rebuild() when nothing
+// observable to the user changed.
+function samePlayers(a: WaitingRoomPlayer[], b: WaitingRoomPlayer[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (
+      a[i]!.username !== b[i]!.username ||
+      a[i]!.isHost !== b[i]!.isHost ||
+      a[i]!.isMe !== b[i]!.isMe
+    ) {
+      return false
+    }
+  }
+  return true
 }

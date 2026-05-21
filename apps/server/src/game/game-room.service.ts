@@ -15,6 +15,7 @@ import {
   SERVER_TICK_HZ,
   SPAWN_BAND_WIDTH,
   SPAWN_BAND_X,
+  USERNAME_MAX_LENGTH,
   WALK_SPEED,
   WORLD_HEIGHT,
   WORLD_WIDTH,
@@ -65,11 +66,18 @@ interface BotInternalState extends BotState {
 // Per-room state. Owned and instantiated by RoomRegistry; not a Nest provider.
 export class GameRoomService {
   private readonly playerOrder: string[] = []
+  // Authoritative username per socket. Set at addPlayer time, persists across
+  // start/replay cycles. Cleared on removePlayer.
+  private readonly usernames = new Map<string, string>()
   private readonly players = new Map<string, PlayerState>()
   private readonly inputs = new Map<string, InputPayload>()
   private bots: BotInternalState[] = []
   private status: RoomStatus = 'waiting'
   private static readonly TICK_SCALE = 60 / SERVER_TICK_HZ
+  // Default placeholder pre-filled on the client. Treated as "no real name
+  // chosen" so the server falls back to "Joueur N" rather than letting every
+  // lobby end up full of identical "Joueur" entries.
+  private static readonly DEFAULT_USERNAME = 'Joueur'
 
   // Test hook: injected RNG so spawn/tick are deterministic in unit tests.
   // Defaults to Math.random in production.
@@ -79,9 +87,10 @@ export class GameRoomService {
     this.rng = rng
   }
 
-  addPlayer(id: string): void {
+  addPlayer(id: string, rawUsername = ''): void {
     if (this.playerOrder.includes(id)) return
     this.playerOrder.push(id)
+    this.usernames.set(id, this.resolveUsername(rawUsername))
   }
 
   removePlayer(id: string): void {
@@ -89,6 +98,7 @@ export class GameRoomService {
     if (idx >= 0) this.playerOrder.splice(idx, 1)
     this.players.delete(id)
     this.inputs.delete(id)
+    this.usernames.delete(id)
     // Empty room: drop any leftover game state so the next connection starts
     // in a clean `waiting` lobby. Without this, refreshing the host while
     // running/ended leaves the room stuck and the next Démarrer click is
@@ -104,9 +114,29 @@ export class GameRoomService {
 
   snapshotLobby(): LobbyStatePayload {
     return {
-      players: this.playerOrder.map((id, i) => ({ id, isHost: i === 0 })),
+      players: this.playerOrder.map((id, i) => ({
+        id,
+        isHost: i === 0,
+        username: this.usernames.get(id) ?? '',
+      })),
       status: this.status,
     }
+  }
+
+  usernameFor(id: string): string {
+    return this.usernames.get(id) ?? ''
+  }
+
+  // Trim + cap + fallback. Empty or "Joueur" (the client placeholder) is
+  // treated as "no real name" and replaced with "Joueur N" where N is the
+  // player's 1-based join order in the room. Uniqueness across players is
+  // not enforced — two "Antoine" in the same room is allowed.
+  private resolveUsername(raw: string): string {
+    const trimmed = raw.trim().slice(0, USERNAME_MAX_LENGTH)
+    if (trimmed.length === 0 || trimmed === GameRoomService.DEFAULT_USERNAME) {
+      return `${GameRoomService.DEFAULT_USERNAME} ${this.playerOrder.length}`
+    }
+    return trimmed
   }
 
   start(requesterId: string): GameStartedPayload | null {
@@ -352,6 +382,7 @@ export class GameRoomService {
       // Initial pointer position colocated with the player so before the
       // first input event there's still a valid crosshair to render.
       pointer: { x, y: y - 60 },
+      username: this.usernames.get(id) ?? '',
     }
   }
 }

@@ -64,7 +64,12 @@ export interface PlayerState extends ZombieState {
   // World-space pointer position broadcast to all peers so each client can
   // render every other player's crosshair.
   pointer: { x: number; y: number }
+  username: string
 }
+
+// Hard cap on stored username length. Trimmed and sliced server-side so a
+// hostile client can't bloat the lobby payload.
+export const USERNAME_MAX_LENGTH = 20
 
 // Server-driven background zombies — the "hide among them" camouflage of the
 // original game. Visually indistinguishable from players: same sprites, same
@@ -90,7 +95,7 @@ export interface FirePayload {
 }
 
 export interface LobbyStatePayload {
-  players: { id: string; isHost: boolean }[]
+  players: { id: string; isHost: boolean; username: string }[]
   status: RoomStatus
 }
 
@@ -113,18 +118,27 @@ export interface ShotFiredPayload {
 
 export interface PlayerKilledPayload {
   id: string
+  // Present only when the killed entity is a real player (not a bot). Used by
+  // the client to surface a "X est mort" banner; bots die silently.
+  username?: string
 }
 
 export interface GameEndedPayload {
   winnerId: string
+  winnerUsername: string
 }
 
 export interface PlayerLeftPayload {
   id: string
 }
 
+export interface CreateRoomPayload {
+  username: string
+}
+
 export interface JoinRoomPayload {
   code: string
+  username: string
 }
 
 export interface RoomCreatedPayload {
@@ -145,7 +159,7 @@ export interface RoomJoinFailedPayload {
 
 // Client → Server
 export interface ClientToServerEvents {
-  'create-room': () => void
+  'create-room': (payload: CreateRoomPayload) => void
   'join-room': (payload: JoinRoomPayload) => void
   start: () => void // host only, valid in `waiting`
   replay: () => void // host only, valid in `ended` — resets to `waiting`

@@ -16,37 +16,96 @@ describe('GameRoomService — lobby', () => {
   })
 
   it('makes the first connecting socket the host', () => {
-    room.addPlayer('a')
+    room.addPlayer('a', 'Antoine')
     expect(room.snapshotLobby()).toEqual({
-      players: [{ id: 'a', isHost: true }],
+      players: [{ id: 'a', isHost: true, username: 'Antoine' }],
       status: 'waiting',
     })
   })
 
   it('keeps the oldest connection as host when others join', () => {
-    room.addPlayer('a')
-    room.addPlayer('b')
+    room.addPlayer('a', 'Antoine')
+    room.addPlayer('b', 'Bruno')
     expect(room.snapshotLobby().players).toEqual([
-      { id: 'a', isHost: true },
-      { id: 'b', isHost: false },
+      { id: 'a', isHost: true, username: 'Antoine' },
+      { id: 'b', isHost: false, username: 'Bruno' },
     ])
   })
 
   it('promotes the next-oldest socket when the host leaves', () => {
-    room.addPlayer('a')
-    room.addPlayer('b')
-    room.addPlayer('c')
+    room.addPlayer('a', 'Antoine')
+    room.addPlayer('b', 'Bruno')
+    room.addPlayer('c', 'Cécile')
     room.removePlayer('a')
     expect(room.snapshotLobby().players).toEqual([
-      { id: 'b', isHost: true },
-      { id: 'c', isHost: false },
+      { id: 'b', isHost: true, username: 'Bruno' },
+      { id: 'c', isHost: false, username: 'Cécile' },
     ])
   })
 
   it('reports the room as empty after everyone leaves', () => {
-    room.addPlayer('a')
+    room.addPlayer('a', 'Antoine')
     room.removePlayer('a')
     expect(room.snapshotLobby()).toEqual({ players: [], status: 'waiting' })
+  })
+})
+
+describe('GameRoomService — usernames', () => {
+  let room: GameRoomService
+
+  beforeEach(() => {
+    room = new GameRoomService()
+  })
+
+  it('falls back to "Joueur N" when an empty username is provided', () => {
+    room.addPlayer('a', '')
+    room.addPlayer('b', '   ')
+    expect(room.snapshotLobby().players.map((p) => p.username)).toEqual([
+      'Joueur 1',
+      'Joueur 2',
+    ])
+  })
+
+  it('treats the literal default placeholder "Joueur" as no real name chosen', () => {
+    room.addPlayer('a', 'Joueur')
+    room.addPlayer('b', 'Joueur')
+    expect(room.snapshotLobby().players.map((p) => p.username)).toEqual([
+      'Joueur 1',
+      'Joueur 2',
+    ])
+  })
+
+  it('trims whitespace and caps usernames at USERNAME_MAX_LENGTH', () => {
+    room.addPlayer('a', '   Antoine   ')
+    room.addPlayer('b', 'a'.repeat(50))
+    const players = room.snapshotLobby().players
+    expect(players[0]!.username).toBe('Antoine')
+    expect(players[1]!.username).toHaveLength(20)
+  })
+
+  it('keeps the same username across replay (only snapshot players cleared)', () => {
+    room.addPlayer('a', 'Antoine')
+    room.start('a')
+    room.teleportForTest('a', 9999)
+    room.tickAndCheckWinner()
+    room.replay('a')
+    expect(room.usernameFor('a')).toBe('Antoine')
+    expect(room.snapshotLobby().players[0]!.username).toBe('Antoine')
+  })
+
+  it('copies the username onto the spawned PlayerState', () => {
+    room.addPlayer('a', 'Antoine')
+    const result = room.start('a')!
+    expect(result.players[0]!.username).toBe('Antoine')
+  })
+
+  it('allows two players to pick the same username in a room', () => {
+    room.addPlayer('a', 'Antoine')
+    room.addPlayer('b', 'Antoine')
+    expect(room.snapshotLobby().players.map((p) => p.username)).toEqual([
+      'Antoine',
+      'Antoine',
+    ])
   })
 })
 

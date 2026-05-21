@@ -62,6 +62,14 @@ export class GameScene extends Scene {
     number,
     { move: (e: PointerEvent) => void; up: (e: PointerEvent) => void }
   >()
+  // Top-screen "X est mort" banners. New banners stack below older ones; each
+  // is shown opaque for 3 s then fades over the 4th second. Bots dying is
+  // silent (gateway omits `username` for bot kills) so they never get a
+  // banner.
+  private deathBannerLayer: Container | null = null
+  private deathBanners: { text: Text; addedAt: number }[] = []
+  private static readonly DEATH_BANNER_DURATION_MS = 4000
+  private static readonly DEATH_BANNER_FADE_MS = 1000
 
   constructor(private readonly game: Game) {
     super()
@@ -102,6 +110,9 @@ export class GameScene extends Scene {
     this.teardownMobileUI()
     this.waitingOverlay?.destroy({ children: true })
     this.waitingOverlay = null
+    this.deathBanners = []
+    this.deathBannerLayer?.destroy({ children: true })
+    this.deathBannerLayer = null
     if (this.lobbyHandler) {
       this.game.net.off('lobby-state', this.lobbyHandler)
       this.lobbyHandler = null
@@ -133,6 +144,9 @@ export class GameScene extends Scene {
   }
 
   update(_delta: number): void {
+    // Banners tick on real time, independent of the gameStarted gate, so a
+    // banner already on screen keeps fading even if the game just ended.
+    this.updateDeathBanners()
     if (!this.gameStarted) return
     this.crosshair.position.set(this.game.input.pointer.x, this.game.input.pointer.y)
     this.worldPointer = this.gameLayer.toLocal({
@@ -176,6 +190,7 @@ export class GameScene extends Scene {
     for (const z of this.remoteZombies.values()) z.scale.set(zombieScale)
 
     this.waitingOverlay?.resize(canvasWidth, canvasHeight)
+    this.repositionDeathBanners()
 
     if (this.touchSurface) {
       this.touchSurface
@@ -277,6 +292,63 @@ export class GameScene extends Scene {
     // state snapshot — without this, a quick double-click could squeeze a
     // fire emit between the kill event and the snapshot that flips isAlive.
     if (payload.id === this.game.net.id) this.isAlive = false
+    if (payload.username) this.addDeathBanner(payload.username)
+  }
+
+  private addDeathBanner(username: string): void {
+    if (!this.deathBannerLayer) {
+      this.deathBannerLayer = new Container()
+      // Sit above everything else (zombies, effects, mobile controls) so the
+      // banner is never visually covered.
+      this.addChild(this.deathBannerLayer)
+    }
+    const text = new Text({
+      text: `${username} est mort`,
+      style: {
+        fill: 0xff5555,
+        fontSize: 22,
+        fontFamily: 'Space Mono, monospace',
+        fontWeight: 'bold',
+      },
+    })
+    text.anchor.set(0.5)
+    this.deathBannerLayer.addChild(text)
+    this.deathBanners.push({ text, addedAt: Date.now() })
+    this.repositionDeathBanners()
+  }
+
+  private updateDeathBanners(): void {
+    if (this.deathBanners.length === 0) return
+    const now = Date.now()
+    let expiredCount = 0
+    for (const banner of this.deathBanners) {
+      const age = now - banner.addedAt
+      if (age >= GameScene.DEATH_BANNER_DURATION_MS) {
+        banner.text.destroy()
+        expiredCount += 1
+        continue
+      }
+      const fadeStart = GameScene.DEATH_BANNER_DURATION_MS - GameScene.DEATH_BANNER_FADE_MS
+      banner.text.alpha =
+        age < fadeStart
+          ? 1
+          : (GameScene.DEATH_BANNER_DURATION_MS - age) / GameScene.DEATH_BANNER_FADE_MS
+    }
+    if (expiredCount > 0) {
+      this.deathBanners.splice(0, expiredCount)
+      this.repositionDeathBanners()
+    }
+  }
+
+  private repositionDeathBanners(): void {
+    const { canvasWidth } = this.game.layout
+    const cx = canvasWidth / 2
+    // First banner sits 80 px from top, each subsequent one 30 px below.
+    const top = 80
+    const lineHeight = 30
+    this.deathBanners.forEach((banner, i) => {
+      banner.text.position.set(cx, top + i * lineHeight)
+    })
   }
 
   private onPlayerLeft(payload: PlayerLeftPayload): void {
@@ -297,6 +369,7 @@ export class GameScene extends Scene {
     void this.game.sceneManager.goTo(new EndScene(this.game), {
       won,
       code: this.roomCode,
+      winnerUsername: payload.winnerUsername,
     })
   }
 
@@ -425,7 +498,7 @@ export class GameScene extends Scene {
     this.waitingOverlay = new WaitingRoomOverlay({
       width: canvasWidth,
       height: canvasHeight,
-      playerCount: 0,
+      players: [],
       isHost: false,
       code: this.roomCode,
       onStart: () => {
@@ -439,7 +512,13 @@ export class GameScene extends Scene {
     if (!this.waitingOverlay) return
     const me = this.game.net.id
     const isHost = payload.players.some((p) => p.id === me && p.isHost)
-    this.waitingOverlay.setPlayerCount(payload.players.length)
+    this.waitingOverlay.setPlayers(
+      payload.players.map((p) => ({
+        username: p.username,
+        isHost: p.isHost,
+        isMe: p.id === me,
+      })),
+    )
     this.waitingOverlay.setHost(isHost)
   }
 

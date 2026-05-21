@@ -11,10 +11,12 @@ import { Scene } from './Scene'
 export interface EndSceneParams {
   won: boolean
   code: string | null
+  winnerUsername: string
 }
 
 export class EndScene extends Scene {
   private message!: Text
+  private subtitle!: Text
   private elapsed = 0
   private replayBtn: Button | null = null
   private hint: Text | null = null
@@ -28,6 +30,7 @@ export class EndScene extends Scene {
   onEnter(params?: unknown): void {
     const typed = params as EndSceneParams | undefined
     const won = typed?.won ?? true
+    const winnerUsername = typed?.winnerUsername ?? ''
     this.roomCode = typed?.code ?? null
     const { canvasWidth, canvasHeight } = this.game.layout
 
@@ -40,6 +43,17 @@ export class EndScene extends Scene {
     this.message.alpha = 0
     this.message.scale.set(0.4)
     this.addChild(this.message)
+
+    // Subtitle naming the winner. Shown to both the winner and the losers —
+    // even the winner sees their own pseudo (sanity check that the right
+    // identity was registered server-side).
+    this.subtitle = new Text({
+      text: winnerUsername ? `${winnerUsername} a gagné` : '',
+      style: { fill: 0xffffff, fontSize: 24, fontFamily: 'Space Mono, monospace' },
+    })
+    this.subtitle.anchor.set(0.5)
+    this.subtitle.position.set(canvasWidth / 2, canvasHeight / 2 + 10)
+    this.addChild(this.subtitle)
 
     // Listen for the lobby reset that follows a successful replay.
     this.lobbyHandler = (payload) => this.onLobbyState(payload)
@@ -64,8 +78,9 @@ export class EndScene extends Scene {
   override resize(_layout: Layout): void {
     const { canvasWidth, canvasHeight } = this.game.layout
     this.message?.position.set(canvasWidth / 2, canvasHeight / 2 - 60)
-    this.replayBtn?.position.set(canvasWidth / 2, canvasHeight / 2 + 60)
-    this.hint?.position.set(canvasWidth / 2, canvasHeight / 2 + 60)
+    this.subtitle?.position.set(canvasWidth / 2, canvasHeight / 2 + 10)
+    this.replayBtn?.position.set(canvasWidth / 2, canvasHeight / 2 + 80)
+    this.hint?.position.set(canvasWidth / 2, canvasHeight / 2 + 80)
   }
 
   private onLobbyState(payload: LobbyStatePayload): void {
@@ -91,7 +106,7 @@ export class EndScene extends Scene {
         label: 'Rejouer',
         onClick: () => this.game.net.emit('replay'),
       })
-      btn.position.set(canvasWidth / 2, canvasHeight / 2 + 60)
+      btn.position.set(canvasWidth / 2, canvasHeight / 2 + 80)
       this.addChild(btn)
       this.replayBtn = btn
     } else {
@@ -100,7 +115,7 @@ export class EndScene extends Scene {
         style: { fill: 0xaaaaaa, fontSize: 18, fontFamily: 'Space Mono, monospace' },
       })
       hint.anchor.set(0.5)
-      hint.position.set(canvasWidth / 2, canvasHeight / 2 + 60)
+      hint.position.set(canvasWidth / 2, canvasHeight / 2 + 80)
       this.addChild(hint)
       this.hint = hint
     }
