@@ -1352,30 +1352,515 @@ La Partie 2 zoome arrière : tout ce qu'on vient de voir tourne au fond d'un con
 
 ## 8. Vue d'avion : l'architecture complète
 
-_À rédiger._
+La Partie 1 a regardé le code de très près. La Partie 2 change d'échelle radicalement : on prend de la hauteur pour voir tout ce qui se passe entre ton clic et ta carte graphique, et plus précisément entre le navigateur d'un joueur et notre Gateway NestJS qui tourne quelque part en Île-de-France.
+
+### Le diagramme
+
+```mermaid
+flowchart LR
+  U[Joueur]
+  U -->|game.marche-ou-creve.com<br/>HTTPS| CFP[Cloudflare<br/>proxy ON]
+  U -->|api.marche-ou-creve.com<br/>HTTPS + WSS| CFD[Cloudflare<br/>DNS only]
+  CFP -->|HTTP| S3[(S3 bucket<br/>game.marche-ou-creve.com<br/>region eu-west-3)]
+  CFD -.->|résolution DNS uniquement| EIP[EIP 15.237.242.223]
+  EIP --> EC2[EC2 t3.micro<br/>Ubuntu 24.04 LTS]
+  EC2 --> SG[Security Group<br/>sg-0c568554a02091eb2]
+  SG --> Caddy[Caddy v2<br/>TLS via Let's Encrypt]
+  Caddy -->|reverse_proxy localhost:3000<br/>WebSocket transparent| Docker[Container Docker<br/>marche-ou-creve-server]
+  Docker --> Nest["NestJS<br/>GameGateway<br/>(Partie 1)"]
+```
+
+### Deux sous-domaines, deux comportements radicalement différents
+
+Le projet utilise deux noms de domaine, fournis par un seul service DNS (Cloudflare), mais avec des comportements Cloudflare totalement différents :
+
+- **`game.marche-ou-creve.com` → proxy ON (orange cloud)**. Le client statique (HTML + bundle JS PixiJS + assets sprites). Cloudflare termine le TLS, met en cache les assets dans son CDN mondial, et fait le reverse proxy vers le bucket S3. Bonus : protection DDoS et certificat TLS gratuit.
+
+- **`api.marche-ou-creve.com` → DNS only (grey cloud)**. L'API NestJS qui sert le WebSocket. Cloudflare se contente de résoudre le nom de domaine vers l'IP de l'EC2, et ne se met **pas** sur le chemin. Toute la communication client ↔ EC2 passe directement, sans intermédiaire.
+
+Pourquoi cette dichotomie ?
+
+- Le **client est statique et public** : du HTML, du JS, des sprites. Servir ça depuis un CDN mondial est idéal — moins de latence, moins de coût, TLS managé.
+- L'**API est dynamique et stateful** : du WebSocket persistant qui peut durer des heures. Cloudflare en proxy ON imposerait :
+  - Un timeout WebSocket à **100 secondes** sur les plans gratuits (jamais documenté noir sur blanc, mais observé en production par d'autres). Inacceptable pour une partie de jeu.
+  - Un buffering qui peut hacher les frames de gameplay.
+  - Une terminaison TLS Cloudflare ↔ Cloudflare ↔ EC2 qui complique le debug et peut introduire des certificats mismatch.
+- En **DNS only**, on a un seul saut TLS (client → Caddy sur EC2), pas de timeout artificiel, pas de buffering tiers.
+
+C'est un trade-off explicite : on perd la protection DDoS sur l'API, mais on gagne la fiabilité des WebSockets de longue durée.
+
+### TLS, où il se termine
+
+Suivons les certificats :
+
+| Domaine                    | Termine TLS ici            | Pourquoi                                   |
+| -------------------------- | -------------------------- | ------------------------------------------ |
+| `game.marche-ou-creve.com` | Cloudflare edge            | Mode SSL "Flexible" — cert gratuit         |
+| Cloudflare → S3            | HTTP en clair              | Bucket public, contenu non-sensible        |
+| `api.marche-ou-creve.com`  | Caddy (sur EC2)            | Cert Let's Encrypt obtenu automatiquement  |
+| Caddy → container Docker   | HTTP en clair sur loopback | Trafic interne à la machine, jamais exposé |
+
+Le mode "Flexible" pour le client mérite une remarque : le lien Cloudflare → S3 est techniquement en clair. C'est acceptable parce que (1) le contenu est public, (2) la liaison passe par les datacenters AWS depuis Cloudflare avec des SLAs réseau forts. En production "vraie" on passerait en SSL "Full (Strict)" avec un cert sur S3 via CloudFront, mais ce serait sur-ingénierie pour le scope du projet.
+
+### Défense en profondeur
+
+Plusieurs couches empêchent les accès non désirés à l'API :
+
+1. **Security Group** (`sg-0c568554a02091eb2`) : seuls les ports 22, 80 et 443 sont ouverts en entrée. 22 est restreint à l'IP personnelle de l'admin ; 80 et 443 sont ouverts au monde mais aboutissent à Caddy, pas à Node.
+2. **Docker port binding** : `127.0.0.1:3000:3000` dans `docker-compose.prod.yml`. Le port 3000 n'est exposé **que sur le loopback** de l'EC2 — depuis Internet, même si on essayait `15.237.242.223:3000`, le SG bloquerait, et même si le SG laissait passer, Docker ne répondrait pas. Deux verrous au lieu d'un.
+3. **CORS** : `CORS_ORIGIN=https://game.marche-ou-creve.com` dans `docker-compose.prod.yml`. Une socket dont le header `Origin` ne match pas se voit refuser le handshake.
+
+Ces trois couches sont indépendantes : il faudrait que toutes trois soient mal configurées pour qu'un attaquant atteigne la gateway depuis l'extérieur.
+
+### Suite de la Partie 2
+
+Le reste de cette partie suit le parcours d'un joueur en trois phases :
+
+- **Phase 1** (chapitre 9) : charger le jeu — comment le client statique arrive dans le navigateur.
+- **Phase 2** (chapitre 10) : connecter le WebSocket — le chemin de bout en bout, le handshake, ce que fait chaque couche.
+- **Phase 3** (chapitre 11) : jouer une partie — un aller-retour d'event gameplay dans cette architecture.
 
 ## 9. Phase 1 : charger le jeu
 
-_À rédiger._
+Le joueur tape `game.marche-ou-creve.com` dans son navigateur. Voici ce qui se passe avant qu'il voie la HomeScene de PixiJS.
+
+### Diagramme
+
+```mermaid
+sequenceDiagram
+  participant U as Navigateur
+  participant DNS as DNS Cloudflare
+  participant CF as Cloudflare edge (proxy ON)
+  participant S3 as S3 bucket<br/>static website endpoint
+
+  U->>DNS: résoudre game.marche-ou-creve.com
+  DNS-->>U: IP Cloudflare edge (anycast)
+  U->>CF: GET / (HTTPS)
+  Note over U,CF: TLS terminé sur Cloudflare<br/>(mode SSL Flexible)
+  CF->>S3: GET / (HTTP, en clair entre CF et S3)
+  S3-->>CF: index.html (Cache-Control: no-cache)
+  CF-->>U: index.html (HTTPS)
+
+  U->>CF: GET /assets/index-XXXX.js (bundle Vite)
+  CF->>S3: GET /assets/index-XXXX.js
+  S3-->>CF: bundle JS (Cache-Control: immutable, 1y)
+  CF-->>U: bundle JS — HIT sur les requêtes suivantes du CDN
+
+  U->>CF: GET /assets/*.png (sprites)
+  CF-->>U: depuis cache CDN (très probable)
+
+  Note over U: Vite/PixiJS démarre,<br/>HomeScene affichée
+```
+
+### Étape 1 — DNS
+
+Avant tout, le navigateur doit savoir vers quelle IP envoyer la requête. Le DNS du domaine `marche-ou-creve.com` est géré par Cloudflare. Le record `game` est de type **CNAME proxied** : Cloudflare répond avec une IP de son réseau edge mondial (anycast), pas avec l'IP du bucket S3.
+
+Conséquence : la requête HTTP/S est dirigée vers le datacenter Cloudflare le plus proche du joueur (Paris si en France, Tokyo si au Japon), pas vers Paris pour tout le monde.
+
+### Étape 2 — TLS sur Cloudflare
+
+La connexion TCP s'établit avec l'edge Cloudflare, puis le navigateur initie un handshake TLS. **Cloudflare présente son propre certificat** (couvre tous les domaines qu'il proxy) et termine le TLS. Du point de vue du joueur, il est en HTTPS de bout en bout — ses requêtes sont chiffrées sur le segment internet → Cloudflare.
+
+Mode SSL configuré : **Flexible**. Ça veut dire que Cloudflare termine le TLS et reparle en **HTTP en clair** à l'origine (le bucket S3). Pourquoi pas Full ? Parce que S3 en mode static website ne supporte pas le HTTPS natif (il faudrait passer par CloudFront), et qu'on s'en passe pour du contenu public.
+
+### Étape 3 — Cloudflare → S3
+
+Cloudflare réémet la requête HTTP vers l'endpoint static website du bucket. Détail crucial : **le bucket S3 s'appelle exactement `game.marche-ou-creve.com`**, parce que :
+
+- L'endpoint S3 static website est de la forme `<bucket>.s3-website.<region>.amazonaws.com`.
+- Cloudflare ne réécrit pas le header `Host` quand il fait le proxy : il transmet `Host: game.marche-ou-creve.com`.
+- S3 utilise le `Host` pour identifier le bucket à servir.
+
+Donc bucket name = sous-domaine exact. Sans ça, S3 ne reconnaîtrait pas la requête et renverrait un 404.
+
+### Étape 4 — Le cache
+
+Le `deploy-client.sh` (`scripts/deploy-client.sh`) applique deux politiques `Cache-Control` au push :
+
+- **`/assets/*`** (les fichiers nommés `index-A1B2C3.js`, `sprites-XYZ.png`, etc., avec un hash de contenu dans le nom) → `public, max-age=31536000, immutable`. Un an de cache, et le navigateur ne réinterroge même pas le serveur tant que le hash est le même. Si le contenu change, le nom change, donc une nouvelle URL est servie.
+- **Tout le reste** (notamment `index.html`) → `no-cache`. Le navigateur doit valider avec le serveur à chaque chargement.
+
+Conséquence pratique d'un déploiement :
+
+1. `index.html` est synchronisé tout de suite → la prochaine visite au site charge la nouvelle version immédiatement.
+2. Les nouveaux assets (avec nouveaux hashs) sont synchronisés. Les anciens (qui n'apparaissent plus dans `index.html`) sont supprimés via `--delete` du `aws s3 sync`.
+3. Le CDN Cloudflare met en cache les nouveaux assets au premier hit.
+
+Pas besoin de "purger" le cache Cloudflare manuellement : comme les noms de fichiers contiennent un hash, les anciens fichiers ne sont simplement plus demandés.
+
+### Étape 5 — Vite + PixiJS démarre
+
+Le bundle JS est exécuté. Le `apps/client/src/main.ts` initialise PixiJS, le `Application`, le router de scènes, et navigue vers la `HomeScene` (menu d'accueil). À ce stade, **aucun WebSocket n'est encore ouvert** — la connexion à l'API se fera quand le joueur cliquera "Créer une partie" ou "Rejoindre". C'est l'objet de la phase 2.
 
 ## 10. Phase 2 : connecter le WebSocket
 
-_À rédiger._
+C'est le chapitre central de la Partie 2. Le joueur clique "Créer une partie" ; sous le capot, `NetworkManager.connect()` appelle `io('https://api.marche-ou-creve.com', { withCredentials: true })`. Suivons cette requête couche par couche jusqu'à `handleConnection` côté NestJS.
+
+### Diagramme
+
+```mermaid
+sequenceDiagram
+  participant U as Navigateur (client)
+  participant DNS as DNS Cloudflare
+  participant SG as Security Group AWS
+  participant Cad as Caddy (natif sur EC2)
+  participant LE as Let's Encrypt
+  participant D as Container Docker<br/>marche-ou-creve-server
+  participant G as NestJS GameGateway
+
+  U->>DNS: résoudre api.marche-ou-creve.com
+  DNS-->>U: 15.237.242.223 (EIP, DNS only)
+  U->>SG: TCP SYN :443
+  SG-->>U: pass (0.0.0.0/0 sur 443)
+  U->>Cad: TLS handshake
+  Note over Cad,LE: Cert déjà obtenu via ACME,<br/>renouvelé auto à 60 jours
+  Cad-->>U: cert valide, session TLS établie
+  U->>Cad: GET /socket.io/?EIO=4&transport=websocket<br/>Upgrade: websocket
+  Cad->>D: HTTP localhost:3000 (préserve Upgrade & Connection)
+  D->>G: handleConnection(client)
+  G-->>D: ack
+  D-->>Cad: 101 Switching Protocols
+  Cad-->>U: 101 Switching Protocols
+  Note over U,G: Connexion WebSocket persistante établie<br/>traverse Caddy comme un tuyau transparent
+```
+
+### Étape 1 — DNS, sans détour par Cloudflare
+
+Le record `api` est de type **A DNS only** (grey cloud) qui pointe vers l'EIP `15.237.242.223`. Cloudflare ne fait que résoudre — il ne se met pas sur le chemin. Donc le client ouvre une connexion TCP directement sur l'IP de l'EC2.
+
+**Pourquoi DNS only et pas proxy ON** : Cloudflare en proxy ON imposerait un timeout WebSocket aux alentours de 100 secondes sur les plans gratuits. Pour un jeu où les parties durent plusieurs minutes (et où on garde des connexions ouvertes entre les manches), c'est rédhibitoire. DNS only contourne complètement le problème.
+
+### Étape 2 — Security Group : portail d'entrée AWS
+
+Le paquet TCP arrive sur l'EC2 et se présente au **Security Group** `sg-0c568554a02091eb2`. Le SG joue le rôle de firewall stateful AWS. Ses règles entrantes :
+
+| Port | Source       | Pourquoi                                            |
+| ---- | ------------ | --------------------------------------------------- |
+| 22   | IP perso /24 | SSH admin, restreint à un réseau personnel          |
+| 80   | `0.0.0.0/0`  | HTTP — utilisé par Let's Encrypt et la redirect 443 |
+| 443  | `0.0.0.0/0`  | HTTPS / WSS — entrée publique du jeu                |
+
+Le port 3000 n'apparaît **pas**. Même si Docker était mal configuré pour binder `0.0.0.0:3000`, le SG bloquerait. Et le port 80 reste ouvert non pas pour servir du HTTP mais pour deux raisons :
+
+1. **Renouvellement Let's Encrypt** : par défaut, ACME utilise le challenge HTTP-01 qui demande au serveur de servir un fichier sur `/.well-known/acme-challenge/...` en HTTP. Caddy s'en charge automatiquement.
+2. **Redirect 80 → 443** : Caddy redirige les requêtes HTTP vers HTTPS pour les utilisateurs qui taperaient `http://api.marche-ou-creve.com`.
+
+### Étape 3 — TLS via Caddy + Let's Encrypt
+
+Le SG laisse passer, le paquet arrive sur Caddy qui écoute sur `:443`. Le navigateur initie un handshake TLS. Caddy présente un certificat **Let's Encrypt** émis pour `api.marche-ou-creve.com`.
+
+Ce certificat a été obtenu automatiquement la première fois que Caddy a démarré avec ce domaine dans son `Caddyfile`. Le flux ACME (challenge HTTP-01) :
+
+1. Caddy démarre, voit le domaine `api.marche-ou-creve.com`, n'a pas de cert.
+2. Caddy contacte les serveurs Let's Encrypt et demande un cert.
+3. Let's Encrypt lui retourne un challenge : "sers un fichier précis à `/.well-known/acme-challenge/<token>` sur ce domaine".
+4. Caddy sert le fichier sur le port 80 (d'où l'importance que 80 soit ouvert dans le SG).
+5. Let's Encrypt valide en récupérant le fichier, émet le certificat.
+6. Caddy le stocke (par défaut dans `/var/lib/caddy/.local/share/caddy/`).
+7. À 60 jours (les certs sont valides 90 jours), Caddy refait automatiquement le cycle pour renouveler.
+
+Tout ça sans aucune ligne de configuration spécifique TLS — c'est le comportement par défaut de Caddy v2.
+
+### Étape 4 — Caddy, le reverse proxy transparent
+
+Le `Caddyfile` du projet, en entier :
+
+```caddyfile
+{
+    email p.doazan@lehibou.com
+}
+
+api.marche-ou-creve.com {
+    reverse_proxy localhost:3000
+
+    log {
+        output stdout
+        format console
+    }
+}
+```
+
+Cinq lignes utiles (hors logs). Le bloc global déclare l'email pour les notifs Let's Encrypt. Le bloc nommé déclare le reverse proxy.
+
+**`reverse_proxy localhost:3000`** suffit à gérer correctement l'upgrade WebSocket. Caddy v2 préserve par défaut les headers `Upgrade` et `Connection`, et il a un mode "tunneling" automatique pour les connexions long-lived. C'est radicalement plus simple que la config nginx équivalente, qui demanderait au moins :
+
+```nginx
+location / {
+    proxy_pass http://localhost:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+}
+```
+
+### Étape 5 — Docker, le port loopback
+
+Caddy ouvre une connexion HTTP vers `localhost:3000`. Le container Docker, configuré dans `docker-compose.prod.yml`, expose son port 3000 uniquement sur le loopback :
+
+```yaml
+ports:
+  - '127.0.0.1:3000:3000'
+```
+
+C'est très différent du `'3000:3000'` qu'on voit souvent dans les tutos. Conséquence : le port 3000 n'est joignable que depuis l'EC2 elle-même (Caddy fait partie de l'EC2). Personne sur Internet ne peut taper `15.237.242.223:3000` et tomber sur Node, même si le SG le permettait.
+
+### Étape 6 — NestJS reçoit la connexion
+
+Le serveur Node (NestJS) écoute sur `0.0.0.0:3000` _à l'intérieur du container_, mais comme Docker mappe seulement le loopback hôte → container, c'est invisible de l'extérieur. La requête de Caddy arrive, Socket.IO la reconnaît comme un handshake d'upgrade, négocie, et `handleConnection` de notre `GameGateway` (cf. chapitre 5.4) est appelée.
+
+À ce stade, la socket est **enregistrée du côté NestJS** : son `socket.id` est généré, elle peut émettre et recevoir. Mais elle n'est encore attachée à aucune room — c'est le prochain event du client (`create-room` ou `join-room`) qui finalisera l'adhésion logique.
+
+### Étape 7 — CORS, la dernière garde
+
+Avant que tout ça réussisse, Socket.IO vérifie le header `Origin` de la requête initiale et le compare à la config CORS de la Gateway :
+
+```typescript
+@WebSocketGateway({ cors: { origin: getCorsOrigin(), credentials: true } })
+```
+
+`getCorsOrigin()` lit `process.env.CORS_ORIGIN`, qui en prod vaut `https://game.marche-ou-creve.com`. Une requête venue d'un autre origin (un client malveillant hébergé ailleurs) sera refusée au handshake.
+
+C'est notre **dernière ligne de défense applicative** : SG → Docker bind → Caddy → CORS. Quatre couches, indépendantes, qu'un attaquant devrait toutes contourner pour atteindre la logique de jeu.
 
 ## 11. Phase 3 : jouer une partie
 
-_À rédiger._
+Phase 1 a chargé le client, Phase 2 a établi la connexion. Le joueur est en partie : son viseur se balade à l'écran, il tire. Cette section suit l'aller-retour d'un de ces événements à travers toute l'infrastructure.
+
+### Diagramme
+
+```mermaid
+sequenceDiagram
+  participant P as PixiJS (client)
+  participant Cad as Caddy
+  participant D as Container Docker
+  participant N as NestJS GameGateway
+  participant GR as GameRoomService
+  participant O as Autres joueurs<br/>de la room
+
+  P->>P: clic souris, calcul du point (x, y)
+  P->>Cad: frame WebSocket: 42["fire", { pointer, scale }]
+  Note over Cad: Caddy ne fait que passer<br/>(connexion persistante, pas de re-handshake)
+  Cad->>D: même frame
+  D->>N: même frame
+  N->>GR: room.fire(shooterId, pointer, scale)
+  GR->>GR: findNearestHit + état mis à jour
+  GR-->>N: { shooterId, origin, hit }
+  N->>Cad: broadcast frame: 42["shot-fired", result]
+  Cad->>P: même frame
+  Cad->>O: même frame
+  alt hit est un joueur réel
+    N->>Cad: broadcast frame: 42["player-killed", { id, username }]
+    Cad->>P: même frame
+    Cad->>O: même frame
+  end
+  P->>P: PixiJS rend l'animation de tir + état mis à jour
+  O->>O: idem chez les autres
+```
+
+### Trois points pédagogiques
+
+#### 1. La connexion est persistante
+
+Comparons avec la Phase 2. Pour cette interaction, **il n'y a eu aucun re-handshake** : pas de nouvelle requête HTTP, pas de nouveau TLS, pas de nouvelle résolution DNS. La connexion TCP + TLS établie en Phase 2 sert pour toute la durée de la partie (et même au-delà, jusqu'à ce que le joueur ferme l'onglet ou que le ping/pong détecte une coupure).
+
+Concrètement, pour un tir, la latence est **uniquement** :
+
+- ~quelques ms aller-retour navigateur ↔ EC2 (réseau pur),
+- ~1 ms de traversée Caddy + Docker (loopback),
+- ~quelques ms de calcul de collision côté NestJS,
+- ~quelques ms de retour réseau.
+
+En France métropolitaine vers Paris, c'est confortablement sous les 50 ms aller-retour. Comparé à du polling où chaque tir aurait nécessité un handshake TCP + TLS complet (~200-500 ms supplémentaires), c'est un autre monde.
+
+#### 2. Caddy est transparent en mode WebSocket
+
+Une fois l'upgrade fait, Caddy ne "voit" plus le contenu Socket.IO. Il fait passer les frames WebSocket dans les deux sens, dans l'ordre où elles arrivent, sans les inspecter. Le code Socket.IO (`42["fire", ...]`) ne signifie rien pour lui — c'est juste un blob de bytes à transmettre.
+
+Pourquoi c'est important :
+
+- Caddy ne peut pas faire de cache, de réécriture, de retry — et c'est exactement ce qu'on veut pour du temps réel.
+- Aucun overhead d'analyse par message (alors qu'en HTTP classique chaque requête est parsée, routée, loguée).
+- L'ordre d'arrivée des frames est strictement préservé par TCP — pas de risque que le `state` arrive avant le `player-killed` qui aurait causé un visuel incohérent.
+
+#### 3. Le serveur est autoritaire
+
+Le client envoie une **intention** : "j'ai cliqué à cet endroit". Le serveur décide ce qui se passe :
+
+- Le joueur a-t-il encore une balle ? (`shooter.bulletsRemaining > 0`)
+- La partie est-elle en cours ? (`status === 'running'`)
+- Le clic touche-t-il quelque chose ? (`findNearestHit`)
+- Si oui, qui ? (le plus proche, ou le plus en avant si plusieurs candidats)
+
+Le résultat est ce que le client affiche. Pas de prédiction critique côté client — uniquement des animations cosmétiques (le viseur suit le pointeur instantanément en local, mais le tir attend la confirmation serveur).
+
+Ça veut dire qu'**aucun client modifié ne peut tricher** sur la collision, l'élimination, ou la victoire. Au pire, il pourrait spammer des events `fire`, mais le serveur appliquerait toujours les règles (bullet check, status check, géométrie).
+
+### Le broadcast scopé
+
+`this.server.to(ctx.code).emit('shot-fired', result)` (cf. `game.gateway.ts:147`) ne diffuse qu'aux sockets qui ont fait `socket.join(code)`. Concrètement :
+
+- Si quatre joueurs sont dans la room `ABCXYZ`, ils ont tous fait `socket.join('ABCXYZ')` à leur arrivée.
+- Le `to('ABCXYZ').emit(...)` réveille uniquement ces quatre sockets.
+- Un cinquième joueur dans la room `KLMNOP` ne reçoit rien.
+
+C'est le mécanisme qui rend possible la coexistence de plusieurs parties simultanées sur le même serveur sans qu'elles se voient les unes les autres.
 
 ## 12. Le déploiement, vu rapidement
 
-_À rédiger._
+Le but de ce chapitre n'est pas de remplacer `docs/deployment-plan.md` (qui détaille jour par jour les étapes de mise en prod), mais de donner l'image mentale du chemin que le code prend pour arriver en production.
+
+### Côté client (S3 + Cloudflare)
+
+```mermaid
+flowchart LR
+  Dev[Mac dev] -->|pnpm --filter client build| Dist[apps/client/dist/]
+  Dist -->|scripts/deploy-client.sh| AWS[aws s3 sync]
+  AWS -->|--cache-control immutable 1y| S3a[(S3 /assets/*)]
+  AWS -->|--cache-control no-cache| S3b[(S3 /index.html)]
+  S3a -. cache CDN .-> CF[Cloudflare edge]
+  S3b -. cache CDN .-> CF
+  CF --> User[Joueur]
+```
+
+Le script `scripts/deploy-client.sh` orchestre tout :
+
+1. Build le package partagé (`pnpm --filter @hips/shared build`) et le client (`pnpm --filter client build`).
+2. Synchronise `apps/client/dist/assets/` vers `s3://game.marche-ou-creve.com/assets/` avec `--cache-control "public, max-age=31536000, immutable"`.
+3. Synchronise tout le reste (notamment `index.html`) avec `--cache-control "no-cache"`.
+
+Le `--delete` sur les deux syncs supprime les fichiers qui ne sont plus présents localement — important pour ne pas laisser traîner d'anciens bundles.
+
+Pas besoin de purger Cloudflare : comme les fichiers `/assets/*` ont des hashs dans leur nom, un nouveau déploiement change les noms ; les anciens ne sont plus référencés et expireront naturellement de cache.
+
+### Côté serveur (Docker + EC2)
+
+```mermaid
+flowchart LR
+  Dev[Mac M1 dev] -->|docker buildx<br/>--platform linux/amd64| Img[image Docker linux/amd64]
+  Img -->|docker save| Tar[tarball]
+  Tar -->|gzip| Gz[.tar.gz]
+  Gz -->|scp| EC2[EC2 t3.micro]
+  EC2 -->|docker load| Loaded[image locale]
+  Loaded -->|docker compose -f docker-compose.prod.yml up -d| Run[container en service]
+```
+
+Détails saillants :
+
+- **`docker buildx build --platform linux/amd64`** : crucial sur un Mac M1 (architecture ARM). Sans `--platform`, on construirait une image ARM qui ne tournerait pas sur l'EC2 x86. Buildx gère le cross-build via QEMU.
+- **`docker save | gzip | scp`** : technique simple sans registry. Au lieu de pousser sur un registry Docker (Docker Hub, ECR), on sérialise l'image en tar, compresse, copie via SSH, et la charge sur l'EC2. Plus lent que `pull` depuis un registry, mais zéro setup.
+- **`restart: unless-stopped`** dans `docker-compose.prod.yml` : si l'EC2 reboote (maintenance AWS, kernel upgrade), Docker redémarre tous les containers configurés ainsi.
+
+### Caddy
+
+Caddy tourne **en service systemd natif** (pas dans Docker). Avantages :
+
+- Démarre avant Docker au boot.
+- Survit indépendamment des cycles de container.
+- Peut écrire ses certs Let's Encrypt dans `/var/lib/caddy/` sans gymnastique de volumes.
+
+Pour appliquer un changement de Caddyfile : `sudo systemctl reload caddy`. Le **reload** (vs restart) recharge la config **sans couper les connexions en cours** — Caddy attend que les connexions actuelles se terminent avant de basculer. Zero-downtime pour modifier la config.
+
+### Évolution prévue
+
+Tout ça est aujourd'hui **manuel** : `bash scripts/deploy-client.sh && rsync image vers EC2 && ssh ... docker compose up`. C'est volontaire pour la phase MVP — voir tourner les rouages avant de les automatiser.
+
+Le plan (jour 8 de `docs/deployment-plan.md`) est de passer à **GitHub Actions** pour :
+
+- déclencher le build au push sur `main`,
+- pousser l'image Docker sur un registry (probablement ECR public),
+- SSH sur l'EC2 pour pull + restart,
+- déployer le client sur S3 + purge ciblée du cache Cloudflare.
+
+D'ici là, le déploiement reste un acte conscient et observé.
 
 ## 13. Annexes
 
 ### Glossaire
 
-_À rédiger._
+**ACK (Socket.IO)** — accusé de réception. Mécanisme qui permet à `socket.emit(event, payload, callback)` de recevoir une réponse explicite du destinataire, comme un appel de fonction. Non utilisé dans ce projet (on travaille en broadcast).
+
+**ACME** — Automatic Certificate Management Environment, le protocole utilisé par Let's Encrypt pour émettre et renouveler des certificats TLS automatiquement.
+
+**Broadcast** — diffuser un message à plusieurs sockets en même temps. Dans Socket.IO, `this.server.to(roomCode).emit(...)` broadcast à tous les sockets d'une room.
+
+**Bundle (Vite)** — le résultat compilé du code client : un ou plusieurs fichiers JS auto-suffisants, prêts à charger dans un navigateur, avec hashs de contenu dans le nom pour le cache.
+
+**CDN** — Content Delivery Network. Réseau de serveurs répartis mondialement qui cachent du contenu statique pour le servir depuis le plus proche du visiteur. Cloudflare en est un.
+
+**Container (Docker)** — environnement d'exécution isolé contenant une image et son runtime. Pour le projet, le serveur NestJS tourne dans un container nommé `marche-ou-creve-server`.
+
+**CORS** — Cross-Origin Resource Sharing. Mécanisme qui contrôle quels sites web peuvent appeler une API. Configuré côté serveur via la variable `CORS_ORIGIN`.
+
+**DNS only / Proxy ON (Cloudflare)** — deux modes de gestion d'un enregistrement DNS chez Cloudflare. _DNS only_ (grey cloud) : Cloudflare ne fait que résoudre l'IP, la connexion va directe à l'origine. _Proxy ON_ (orange cloud) : Cloudflare se met sur le chemin et offre TLS, CDN, DDoS protection.
+
+**EIP** — Elastic IP, une adresse IP publique statique AWS qu'on peut associer ou dissocier d'une EC2. Survit aux reboots et aux changements d'instance.
+
+**Frame (WebSocket)** — l'unité de transmission du protocole WebSocket. Un message applicatif peut tenir en une frame ou être fragmenté sur plusieurs.
+
+**Gateway (NestJS)** — l'équivalent WebSocket d'un Controller. Une classe annotée `@WebSocketGateway()` qui reçoit des events via `@SubscribeMessage(...)` et y répond via une instance `Server` injectée par `@WebSocketServer()`.
+
+**Handshake** — négociation initiale entre client et serveur pour établir une connexion. En WebSocket : requête HTTP avec `Upgrade: websocket`, réponse `101 Switching Protocols`, puis la connexion TCP devient WebSocket.
+
+**Let's Encrypt** — autorité de certification gratuite qui émet des certificats TLS via le protocole ACME. Caddy l'utilise par défaut.
+
+**Long-polling** — technique antérieure aux WebSockets : le client envoie une requête HTTP, le serveur la garde ouverte jusqu'à avoir quelque chose à dire, puis répond. Le client en ouvre immédiatement une nouvelle. Socket.IO l'utilise en fallback si le WebSocket est bloqué.
+
+**Masking** — XOR appliqué côté client sur chaque payload WebSocket sortant, avec une clé aléatoire de 32 bits incluse dans la frame. Existe pour des raisons historiques de sécurité des proxys HTTP, pas pour la confidentialité.
+
+**Namespace (Socket.IO)** — sous-canal logique sur la même connexion WebSocket. Permet de séparer (par exemple) `/admin` de `/chat`. Le projet utilise uniquement le namespace par défaut `/`.
+
+**Ping/Pong** — opcodes WebSocket (0x9 et 0xA) pour vérifier qu'une connexion est encore vivante. Socket.IO ping toutes les ~25 s par défaut.
+
+**Reverse proxy** — serveur qui se met devant un service applicatif pour gérer TLS, multiplexer plusieurs domaines, équilibrer la charge. Dans ce projet, Caddy joue ce rôle pour NestJS.
+
+**Room (Socket.IO)** — groupe nommé de sockets. Un socket rejoint une room avec `socket.join(name)` et le serveur peut broadcaster à tous les membres avec `server.to(name).emit(...)`. Utilisé pour isoler les parties les unes des autres.
+
+**Security Group** — firewall stateful associé à une EC2 ou à une ENI sur AWS. Définit les règles entrantes (qui peut se connecter sur quels ports) et sortantes.
+
+**Slug** — identifiant URL-friendly généré depuis un titre (ex. `## Pour aller plus loin` → `#pour-aller-plus-loin`). Notre handbook a un slugifier custom pour gérer les accents et la ponctuation française correctement.
+
+**SSL Flexible (Cloudflare)** — mode TLS où Cloudflare termine le TLS côté visiteur mais communique en HTTP en clair avec l'origine. Suffisant pour du contenu public, déconseillé pour des données sensibles.
+
+**Tick** — itération de la boucle de simulation côté serveur. Le projet tique à `SERVER_TICK_HZ = 30` (toutes les ~33 ms).
+
+**TLS termination** — l'endroit où le chiffrement TLS s'arrête. Dans le projet : sur Cloudflare pour `game.*` (mode Flexible), sur Caddy pour `api.*` (cert Let's Encrypt).
+
+**Upgrade (HTTP → WebSocket)** — le mécanisme par lequel une connexion HTTP devient une connexion WebSocket. Headers `Upgrade: websocket` et `Connection: Upgrade` côté client, réponse `101 Switching Protocols` côté serveur.
 
 ### Liens utiles
 
-_À rédiger._
+#### WebSocket et Socket.IO
+
+- [RFC 6455 — The WebSocket Protocol](https://www.rfc-editor.org/rfc/rfc6455) — la spec officielle, ~70 pages lisibles.
+- [Socket.IO — documentation officielle](https://socket.io/docs/v4/)
+- [Engine.IO protocol](https://github.com/socketio/engine.io-protocol) — la couche transport sous Socket.IO.
+- [Socket.IO protocol](https://github.com/socketio/socket.io-protocol) — la couche events / rooms / acks qui s'empile par-dessus.
+
+#### NestJS
+
+- [NestJS — Gateways](https://docs.nestjs.com/websockets/gateways)
+- [NestJS — Adapters](https://docs.nestjs.com/websockets/adapter) — pour passer de Socket.IO à `ws` ou μWebSockets.
+
+#### AWS
+
+- [Hosting a static website using Amazon S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/WebsiteHosting.html)
+- [Security groups for your VPC](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)
+- [Elastic IP addresses](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/elastic-ip-addresses-eip.html)
+
+#### Caddy
+
+- [Caddy — reverse_proxy directive](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
+- [Caddy — Automatic HTTPS](https://caddyserver.com/docs/automatic-https)
+
+#### Cloudflare
+
+- [SSL/TLS encryption modes](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/)
+- [DNS records — proxied vs DNS only](https://developers.cloudflare.com/dns/manage-dns-records/reference/proxied-dns-records/)
+
+#### Let's Encrypt et ACME
+
+- [Let's Encrypt — How it works](https://letsencrypt.org/how-it-works/)
+- [RFC 8555 — Automatic Certificate Management Environment (ACME)](https://www.rfc-editor.org/rfc/rfc8555)
