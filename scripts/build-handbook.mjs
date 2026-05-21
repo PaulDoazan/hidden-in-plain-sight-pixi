@@ -12,8 +12,27 @@ const MD_PATH = resolve(DOC_DIR, 'handbook.md');
 const CSS_PATH = resolve(DOC_DIR, 'styles/print.css');
 const OUT_PATH = resolve(DOC_DIR, 'handbook.html');
 
+// GitHub-style slugify: lowercase, strip punctuation, collapse spaces to `-`,
+// keep accented characters (é, è, à, ô, ç, ...) since they render fine in URLs
+// and our TOC explicitly relies on them (e.g. `#4-nestjs-gateway-la-théorie`).
+// Why custom: markdown-it-anchor v9 default keeps periods, colons, question
+// marks and the typographer-substituted curly apostrophe (U+2019), producing
+// URL-encoded anchors like `#4.-nestjs-gateway-%3A-la-th%C3%A9orie` that don't
+// match the TOC and look ugly in the address bar.
+const slugify = (s) =>
+  s
+    .normalize('NFC')
+    // Replace curly quotes/apostrophes with nothing (matches `dune`, `lecran`).
+    .replace(/[‘’“”]/g, '')
+    .toLowerCase()
+    // Drop anything that isn't a letter (incl. accents), digit, space or dash.
+    .replace(/[^\p{L}\p{N} -]+/gu, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+
 const md = new MarkdownIt({ html: true, linkify: true, typographer: true })
-  .use(anchor, { permalink: anchor.permalink.headerLink() });
+  .use(anchor, { permalink: anchor.permalink.headerLink(), slugify });
 
 // Render fenced code blocks with language `mermaid` as <div class="mermaid">
 const defaultFence = md.renderer.rules.fence;
