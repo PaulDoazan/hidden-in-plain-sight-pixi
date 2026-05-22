@@ -396,9 +396,10 @@ describe('GameRoomService — disconnect during running', () => {
     room.addPlayer('a', 'Antoine')
     room.addPlayer('b', 'Bruno')
     room.start('a')
-    // Teleport 'a' to x=0 (outside the bot spawn band) then fire at its new
-    // position so no bot can intercept the shot.
-    room.teleportForTest('a', 0)
+    // Teleport 'a' far past the bot spawn band (x=1500) so no bot can
+    // intercept the shot — wild bots have a wide AABB that extends left of
+    // SPAWN_BAND_X, so x=0 is not safe.
+    room.teleportForTest('a', 1500)
     const victim = room.snapshotState().players.find((p) => p.id === 'a')!
     room.fire('b', { x: victim.x, y: victim.y - 10 })
     expect(room.snapshotLeaderboard().find((e) => e.id === 'b')!.total).toBe(2)
@@ -535,9 +536,10 @@ describe('GameRoomService — bots', () => {
     room.addPlayer('a', 'Antoine')
     room.addPlayer('b', 'Bruno')
     room.start('a')
-    // Teleport Bruno outside the spawn band (x<30) so no bot occupies the
-    // same x, guaranteeing the shot hits Bruno and not a bot.
-    room.teleportForTest('b', 0)
+    // Teleport Bruno well past the spawn band so no bot can intercept the
+    // shot — wild bots spawn at x=30..50 and their AABB (width 75) extends
+    // left to x≈-7, so x=0 is NOT safe. x=1500 is well outside any bot AABB.
+    room.teleportForTest('b', 1500)
     const victim = room.snapshotState().players.find((p) => p.id === 'b')!
     const result = room.fire('a', { x: victim.x, y: victim.y - 10 })
     expect(result!.hit).toEqual({ targetId: 'b' })
@@ -580,5 +582,52 @@ describe('GameRoomService — bot movement (deterministic)', () => {
     const after = room.botsForTest()[0]!
     expect(after.x).toBeCloseTo(before + WALK_SPEED * (60 / SERVER_TICK_HZ), 5)
     expect(after.animation).toBe('walk')
+  })
+})
+
+describe('GameRoomService — leaderboard snapshot', () => {
+  it('includes every connected player, even those at 0 points', () => {
+    const room = new GameRoomService()
+    room.addPlayer('a', 'Antoine')
+    room.addPlayer('b', 'Bruno')
+    room.start('a')
+    const entries = room.snapshotLeaderboard()
+    const ids = entries.map((e) => e.id).sort()
+    expect(ids).toEqual(['a', 'b'])
+    expect(entries.every((e) => e.total === 0 && e.lastDelta === 0)).toBe(true)
+  })
+
+  it('sorts by total desc, then lastDelta desc, then username asc', () => {
+    const room = new GameRoomService()
+    room.addPlayer('a', 'Aaron')
+    room.addPlayer('b', 'Bruno')
+    room.addPlayer('c', 'Cécile')
+    room.addPlayer('d', 'Zoe')
+    room.start('a')
+    room.setBulletsForTest('a', 10)
+    room.setBulletsForTest('b', 10)
+    // 'b' kills 'a' → b: total 2. Teleport each victim to x=1500 (well past
+    // the bot spawn band) before firing — bots spawn at x=30..50 and wild
+    // types have AABB width=75 so their left edge is at x≈-7, making x=0
+    // unsafe. Positions are captured after the teleport.
+    room.teleportForTest('a', 1500)
+    const aPos = room.snapshotState().players.find((p) => p.id === 'a')!
+    room.fire('b', { x: aPos.x, y: aPos.y - 10 })
+    // 'b' kills 'c' → b: total 4.
+    room.teleportForTest('c', 1500)
+    const cPos = room.snapshotState().players.find((p) => p.id === 'c')!
+    room.fire('b', { x: cPos.x, y: cPos.y - 10 })
+    // dead 'a' kills 'd' → a: total 2.
+    room.teleportForTest('d', 1500)
+    const dPos = room.snapshotState().players.find((p) => p.id === 'd')!
+    room.fire('a', { x: dPos.x, y: dPos.y - 10 })
+    // 'c' (dead, no bullets) stays at 0. 'd' (dead, no bullets) stays at 0.
+    // Expected ordering:
+    //   1. b (total 4)
+    //   2. a (total 2)
+    //   3. c (Cécile, 0/0)  — tie with d on total+delta → username asc
+    //   4. d (Zoe)          — 'Cécile' < 'Zoe' so c before d
+    const board = room.snapshotLeaderboard()
+    expect(board.map((e) => e.id)).toEqual(['b', 'a', 'c', 'd'])
   })
 })
