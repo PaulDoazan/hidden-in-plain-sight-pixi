@@ -249,6 +249,7 @@ export class GameRoomService {
     for (const p of this.players.values()) {
       if (p.isAlive && p.x >= ARRIVAL_LINE_X) {
         this.status = 'ended'
+        this.creditPoints(p.id, 7)
         return { reason: 'arrival', winnerId: p.id }
       }
     }

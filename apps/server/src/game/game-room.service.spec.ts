@@ -334,6 +334,14 @@ describe('GameRoomService — win condition', () => {
     expect(room.snapshotLobby().status).toBe('ended')
   })
 
+  it('credits +7 to the player who crosses the arrival line', () => {
+    room.teleportForTest('a', ARRIVAL_LINE_X + 1)
+    room.tickAndCheckWinner()
+    const winner = room.snapshotLeaderboard().find((e) => e.id === 'a')!
+    expect(winner.total).toBe(7)
+    expect(winner.lastDelta).toBe(7)
+  })
+
   it('keeps the game running while at least one player is still alive', () => {
     // 'b' is still alive — only 'a' is dead and past the line. The dead-past-
     // line case must not be confused with the all-dead end condition.
