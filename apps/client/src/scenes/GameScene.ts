@@ -390,6 +390,7 @@ export class GameScene extends Scene {
       void this.game.sceneManager.goTo(new EndScene(this.game), {
         reason: 'all-dead',
         code: this.roomCode,
+        leaderboard: payload.leaderboard ?? [],
       })
       return
     }
@@ -399,6 +400,7 @@ export class GameScene extends Scene {
       won,
       code: this.roomCode,
       winnerUsername: payload.winnerUsername ?? '',
+      leaderboard: payload.leaderboard ?? [],
     })
   }
 

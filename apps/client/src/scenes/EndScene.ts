@@ -1,5 +1,5 @@
 import { Text } from 'pixi.js'
-import type { LobbyStatePayload } from '@hips/shared'
+import type { LeaderboardEntry, LobbyStatePayload } from '@hips/shared'
 
 import type { Game } from '../app/Game'
 import type { Layout } from '../systems/Layout'
@@ -14,10 +14,12 @@ export type EndSceneParams =
       won: boolean
       code: string | null
       winnerUsername: string
+      leaderboard: LeaderboardEntry[]
     }
   | {
       reason: 'all-dead'
       code: string | null
+      leaderboard: LeaderboardEntry[]
     }
 
 export class EndScene extends Scene {
