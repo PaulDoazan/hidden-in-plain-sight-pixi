@@ -103,6 +103,7 @@ export class GameRoomService {
     this.players.delete(id)
     this.inputs.delete(id)
     this.usernames.delete(id)
+    this.scores.delete(id)
     // Empty room: drop any leftover game state so the next connection starts
     // in a clean `waiting` lobby. Without this, refreshing the host while
     // running/ended leaves the room stuck and the next Démarrer click is
@@ -342,6 +343,12 @@ export class GameRoomService {
     this.players.clear()
     this.inputs.clear()
     this.bots = []
+    // Keep cumulative totals across the series, but zero out every player's
+    // lastDelta so the (+X) indicator shown next round reflects strictly the
+    // round that just begins.
+    for (const score of this.scores.values()) {
+      score.lastDelta = 0
+    }
     return true
   }
 

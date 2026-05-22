@@ -390,6 +390,21 @@ describe('GameRoomService — disconnect during running', () => {
     room.removePlayer('a')
     expect(room.snapshotLobby().status).toBe('waiting')
   })
+
+  it('drops the disconnected player from the leaderboard', () => {
+    const room = new GameRoomService()
+    room.addPlayer('a', 'Antoine')
+    room.addPlayer('b', 'Bruno')
+    room.start('a')
+    // Teleport 'a' to x=0 (outside the bot spawn band) then fire at its new
+    // position so no bot can intercept the shot.
+    room.teleportForTest('a', 0)
+    const victim = room.snapshotState().players.find((p) => p.id === 'a')!
+    room.fire('b', { x: victim.x, y: victim.y - 10 })
+    expect(room.snapshotLeaderboard().find((e) => e.id === 'b')!.total).toBe(2)
+    room.removePlayer('b')
+    expect(room.snapshotLeaderboard().find((e) => e.id === 'b')).toBeUndefined()
+  })
 })
 
 describe('GameRoomService — replay', () => {
@@ -418,6 +433,18 @@ describe('GameRoomService — replay', () => {
     expect(room.replay('a')).toBe(true)
     expect(room.snapshotLobby().status).toBe('waiting')
     expect(room.snapshotState().players).toHaveLength(0)
+  })
+
+  it('keeps cumulative totals but zeroes every lastDelta on replay', () => {
+    // beforeEach already set up: 2 players, started, teleported 'a' past the
+    // line, ran tickAndCheckWinner (so 'a' has total=7, lastDelta=7).
+    expect(room.snapshotLeaderboard().find((e) => e.id === 'a')!.total).toBe(7)
+    room.replay('a')
+    const after = room.snapshotLeaderboard()
+    expect(after.find((e) => e.id === 'a')!.total).toBe(7)
+    expect(after.find((e) => e.id === 'a')!.lastDelta).toBe(0)
+    expect(after.find((e) => e.id === 'b')!.total).toBe(0)
+    expect(after.find((e) => e.id === 'b')!.lastDelta).toBe(0)
   })
 })
 
