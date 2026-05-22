@@ -2,6 +2,7 @@ import type {
   BotState,
   GameStartedPayload,
   InputPayload,
+  LeaderboardEntry,
   LobbyStatePayload,
   PlayerState,
   RoomStatus,
@@ -72,6 +73,9 @@ export class GameRoomService {
   private readonly players = new Map<string, PlayerState>()
   private readonly inputs = new Map<string, InputPayload>()
   private bots: BotInternalState[] = []
+  // Per-room cumulative scores. Survives replay() so a series of games in
+  // the same room feels like a tournament; cleared when the room empties.
+  private readonly scores = new Map<string, { total: number; lastDelta: number }>()
   private status: RoomStatus = 'waiting'
   private static readonly TICK_SCALE = 60 / SERVER_TICK_HZ
   // Default placeholder pre-filled on the client. Treated as "no real name
@@ -315,6 +319,13 @@ export class GameRoomService {
     if (hit) {
       hit.isAlive = false
       hit.animation = 'die'
+      // Player kills earn the shooter +2. Bot kills earn 0 (bots are not in
+      // the leaderboard). `this.players` is the authoritative set of real
+      // players; using it as a guard avoids depending on the id naming
+      // convention `bot-N`.
+      if (this.players.has(hit.id)) {
+        this.creditPoints(shooterId, 2)
+      }
     }
     return {
       shooterId,
@@ -408,5 +419,33 @@ export class GameRoomService {
       pointer: { x, y: y - 60 },
       username: this.usernames.get(id) ?? '',
     }
+  }
+
+  private creditPoints(id: string, points: number): void {
+    const entry = this.scores.get(id) ?? { total: 0, lastDelta: 0 }
+    entry.total += points
+    entry.lastDelta += points
+    this.scores.set(id, entry)
+  }
+
+  // Public snapshot used by the gateway when emitting `game-ended`. Iterates
+  // over playerOrder (every currently-connected player) so a player who has
+  // not yet scored still appears in the ranking with 0 pts.
+  snapshotLeaderboard(): LeaderboardEntry[] {
+    const entries: LeaderboardEntry[] = this.playerOrder.map((id) => {
+      const score = this.scores.get(id) ?? { total: 0, lastDelta: 0 }
+      return {
+        id,
+        username: this.usernames.get(id) ?? '',
+        total: score.total,
+        lastDelta: score.lastDelta,
+      }
+    })
+    entries.sort((a, b) => {
+      if (b.total !== a.total) return b.total - a.total
+      if (b.lastDelta !== a.lastDelta) return b.lastDelta - a.lastDelta
+      return a.username.localeCompare(b.username)
+    })
+    return entries
   }
 }

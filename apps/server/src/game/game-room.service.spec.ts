@@ -494,6 +494,36 @@ describe('GameRoomService — bots', () => {
     expect(room.replay('a')).toBe(true)
     expect(room.botsForTest()).toHaveLength(0)
   })
+
+  it('credits +2 to the shooter when they kill another player', () => {
+    const room = new GameRoomService()
+    room.addPlayer('a', 'Antoine')
+    room.addPlayer('b', 'Bruno')
+    room.start('a')
+    // Teleport Bruno outside the spawn band (x<30) so no bot occupies the
+    // same x, guaranteeing the shot hits Bruno and not a bot.
+    room.teleportForTest('b', 0)
+    const victim = room.snapshotState().players.find((p) => p.id === 'b')!
+    const result = room.fire('a', { x: victim.x, y: victim.y - 10 })
+    expect(result!.hit).toEqual({ targetId: 'b' })
+    const board = room.snapshotLeaderboard()
+    const shooter = board.find((e) => e.id === 'a')!
+    expect(shooter.total).toBe(2)
+    expect(shooter.lastDelta).toBe(2)
+    const dead = board.find((e) => e.id === 'b')!
+    expect(dead.total).toBe(0)
+  })
+
+  it('credits 0 points when the shooter kills a bot', () => {
+    const room = new GameRoomService()
+    room.addPlayer('a', 'Antoine')
+    room.start('a')
+    const target = room.botsForTest()[0]!
+    room.fire('a', { x: target.x, y: target.y - 10 })
+    const shooter = room.snapshotLeaderboard().find((e) => e.id === 'a')!
+    expect(shooter.total).toBe(0)
+    expect(shooter.lastDelta).toBe(0)
+  })
 })
 
 describe('GameRoomService — bot movement (deterministic)', () => {
