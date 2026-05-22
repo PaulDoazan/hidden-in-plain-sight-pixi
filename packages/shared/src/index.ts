@@ -127,6 +127,15 @@ export interface PlayerKilledPayload {
   killerUsername?: string
 }
 
+// Per-player score row sent at the end of every round. Already sorted by
+// the server: total desc, then lastDelta desc, then username asc.
+export interface LeaderboardEntry {
+  id: string
+  username: string
+  total: number
+  lastDelta: number
+}
+
 // Game end has two outcomes:
 //   - 'arrival': a player crossed the arrival line. `winnerId`/`winnerUsername`
 //     identify them.
@@ -137,6 +146,7 @@ export interface GameEndedPayload {
   reason: GameEndReason
   winnerId?: string
   winnerUsername?: string
+  leaderboard?: LeaderboardEntry[]
 }
 
 export interface PlayerLeftPayload {
