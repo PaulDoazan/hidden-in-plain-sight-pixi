@@ -181,14 +181,19 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.server.to(code).emit('state', room.snapshotState())
       if (result) {
         this.stopTickLoop(code)
+        const leaderboard = room.snapshotLeaderboard()
         if (result.reason === 'arrival') {
           this.server.to(code).emit('game-ended', {
             reason: 'arrival',
             winnerId: result.winnerId,
             winnerUsername: room.usernameFor(result.winnerId),
+            leaderboard,
           })
         } else {
-          this.server.to(code).emit('game-ended', { reason: 'all-dead' })
+          this.server.to(code).emit('game-ended', {
+            reason: 'all-dead',
+            leaderboard,
+          })
         }
         this.broadcastLobby(code)
       }
