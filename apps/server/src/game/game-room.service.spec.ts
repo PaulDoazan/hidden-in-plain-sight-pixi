@@ -357,6 +357,14 @@ describe('GameRoomService — win condition', () => {
     expect(result).toEqual({ reason: 'all-dead' })
     expect(room.snapshotLobby().status).toBe('ended')
   })
+
+  it('awards no extra points when the game ends with all players dead', () => {
+    room.killForTest('a')
+    room.killForTest('b')
+    room.tickAndCheckWinner()
+    const board = room.snapshotLeaderboard()
+    expect(board.every((e) => e.total === 0 && e.lastDelta === 0)).toBe(true)
+  })
 })
 
 describe('GameRoomService — disconnect during running', () => {
@@ -629,5 +637,24 @@ describe('GameRoomService — leaderboard snapshot', () => {
     //   4. d (Zoe)          — 'Cécile' < 'Zoe' so c before d
     const board = room.snapshotLeaderboard()
     expect(board.map((e) => e.id)).toEqual(['b', 'a', 'c', 'd'])
+  })
+
+  it('breaks total ties via lastDelta when points were earned in different rounds', () => {
+    const room = new GameRoomService()
+    room.addPlayer('a', 'Ana')
+    room.addPlayer('b', 'Bob')
+    room.start('a')
+    // Round 1: 'a' arrives → a.total=7, a.delta=7
+    room.teleportForTest('a', ARRIVAL_LINE_X + 1)
+    room.tickAndCheckWinner()
+    // Replay zeroes a.delta but keeps a.total=7.
+    room.replay('a')
+    room.start('a')
+    // Round 2: 'b' arrives → b.total=7, b.delta=7. 'a' didn't score this round
+    // so a.delta=0. Both players tie on total=7 — lastDelta breaks the tie.
+    room.teleportForTest('b', ARRIVAL_LINE_X + 1)
+    room.tickAndCheckWinner()
+    const board = room.snapshotLeaderboard()
+    expect(board.map((e) => e.id)).toEqual(['b', 'a'])
   })
 })
