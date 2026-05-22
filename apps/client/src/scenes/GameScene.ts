@@ -62,12 +62,12 @@ export class GameScene extends Scene {
     number,
     { move: (e: PointerEvent) => void; up: (e: PointerEvent) => void }
   >()
-  // Top-screen "X est mort" banners. New banners stack below older ones; each
-  // is shown opaque for 3 s then fades over the 4th second. Bots dying is
-  // silent (gateway omits `username` for bot kills) so they never get a
-  // banner.
+  // Top-screen kill-feed banners ("BANG ! A a tué B"). New banners stack
+  // below older ones; each is shown opaque for 3 s then fades over the 4th
+  // second. Bots dying is silent (gateway omits `username` for bot kills)
+  // so they never get a banner.
   private deathBannerLayer: Container | null = null
-  private deathBanners: { text: Text; addedAt: number }[] = []
+  private deathBanners: { container: Container; addedAt: number }[] = []
   private static readonly DEATH_BANNER_DURATION_MS = 4000
   private static readonly DEATH_BANNER_FADE_MS = 1000
 
@@ -292,28 +292,45 @@ export class GameScene extends Scene {
     // state snapshot — without this, a quick double-click could squeeze a
     // fire emit between the kill event and the snapshot that flips isAlive.
     if (payload.id === this.game.net.id) this.isAlive = false
-    if (payload.username) this.addDeathBanner(payload.username)
+    if (payload.username) {
+      const text = payload.killerUsername
+        ? `BANG ! ${payload.killerUsername} a tué ${payload.username}`
+        : `${payload.username} est mort`
+      this.addDeathBanner(text)
+    }
   }
 
-  private addDeathBanner(username: string): void {
+  private addDeathBanner(message: string): void {
     if (!this.deathBannerLayer) {
       this.deathBannerLayer = new Container()
       // Sit above everything else (zombies, effects, mobile controls) so the
       // banner is never visually covered.
       this.addChild(this.deathBannerLayer)
     }
+    const container = new Container()
     const text = new Text({
-      text: `${username} est mort`,
+      text: message,
       style: {
-        fill: 0xff5555,
-        fontSize: 22,
+        fill: 0xfff700,
+        fontSize: 28,
         fontFamily: 'Space Mono, monospace',
         fontWeight: 'bold',
       },
     })
     text.anchor.set(0.5)
-    this.deathBannerLayer.addChild(text)
-    this.deathBanners.push({ text, addedAt: Date.now() })
+    // Dark background with yellow border, sized from the measured text plus
+    // padding. Matches the game UI convention (Button, ProgressBar, etc.).
+    const padX = 24
+    const padY = 12
+    const bgW = text.width + padX * 2
+    const bgH = text.height + padY * 2
+    const bg = new Graphics()
+      .roundRect(-bgW / 2, -bgH / 2, bgW, bgH, 10)
+      .fill({ color: 0x1f2937 })
+      .stroke({ width: 2, color: 0xfff700 })
+    container.addChild(bg, text)
+    this.deathBannerLayer.addChild(container)
+    this.deathBanners.push({ container, addedAt: Date.now() })
     this.repositionDeathBanners()
   }
 
@@ -324,12 +341,12 @@ export class GameScene extends Scene {
     for (const banner of this.deathBanners) {
       const age = now - banner.addedAt
       if (age >= GameScene.DEATH_BANNER_DURATION_MS) {
-        banner.text.destroy()
+        banner.container.destroy({ children: true })
         expiredCount += 1
         continue
       }
       const fadeStart = GameScene.DEATH_BANNER_DURATION_MS - GameScene.DEATH_BANNER_FADE_MS
-      banner.text.alpha =
+      banner.container.alpha =
         age < fadeStart
           ? 1
           : (GameScene.DEATH_BANNER_DURATION_MS - age) / GameScene.DEATH_BANNER_FADE_MS
@@ -343,11 +360,15 @@ export class GameScene extends Scene {
   private repositionDeathBanners(): void {
     const { canvasWidth } = this.game.layout
     const cx = canvasWidth / 2
-    // First banner sits 80 px from top, each subsequent one 30 px below.
-    const top = 80
-    const lineHeight = 30
-    this.deathBanners.forEach((banner, i) => {
-      banner.text.position.set(cx, top + i * lineHeight)
+    // First banner sits 130 px from top. Each subsequent banner is offset by
+    // its own height + a 12 px margin, so stacked banners never visually
+    // touch even if their content widths differ.
+    const top = 130
+    const margin = 12
+    let y = top
+    this.deathBanners.forEach((banner) => {
+      banner.container.position.set(cx, y)
+      y += banner.container.height + margin
     })
   }
 
@@ -365,11 +386,19 @@ export class GameScene extends Scene {
   }
 
   private onGameEnded(payload: GameEndedPayload): void {
+    if (payload.reason === 'all-dead') {
+      void this.game.sceneManager.goTo(new EndScene(this.game), {
+        reason: 'all-dead',
+        code: this.roomCode,
+      })
+      return
+    }
     const won = payload.winnerId === this.game.net.id
     void this.game.sceneManager.goTo(new EndScene(this.game), {
+      reason: 'arrival',
       won,
       code: this.roomCode,
-      winnerUsername: payload.winnerUsername,
+      winnerUsername: payload.winnerUsername ?? '',
     })
   }
 

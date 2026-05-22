@@ -121,11 +121,22 @@ export interface PlayerKilledPayload {
   // Present only when the killed entity is a real player (not a bot). Used by
   // the client to surface a "X est mort" banner; bots die silently.
   username?: string
+  // Username of the player who fired the killing shot. Set only when both
+  // shooter and victim are real players — used by the client to surface the
+  // "BANG ! A a tué B" kill-feed banner.
+  killerUsername?: string
 }
 
+// Game end has two outcomes:
+//   - 'arrival': a player crossed the arrival line. `winnerId`/`winnerUsername`
+//     identify them.
+//   - 'all-dead': every connected player died. No winner; the client shows
+//     "Vous êtes tous morts !" instead of the usual win/lose split.
+export type GameEndReason = 'arrival' | 'all-dead'
 export interface GameEndedPayload {
-  winnerId: string
-  winnerUsername: string
+  reason: GameEndReason
+  winnerId?: string
+  winnerUsername?: string
 }
 
 export interface PlayerLeftPayload {

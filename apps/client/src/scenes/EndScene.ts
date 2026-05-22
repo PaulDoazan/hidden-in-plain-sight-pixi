@@ -8,11 +8,17 @@ import { Button } from '../ui/Button'
 import { GameScene } from './GameScene'
 import { Scene } from './Scene'
 
-export interface EndSceneParams {
-  won: boolean
-  code: string | null
-  winnerUsername: string
-}
+export type EndSceneParams =
+  | {
+      reason: 'arrival'
+      won: boolean
+      code: string | null
+      winnerUsername: string
+    }
+  | {
+      reason: 'all-dead'
+      code: string | null
+    }
 
 export class EndScene extends Scene {
   private message!: Text
@@ -29,14 +35,23 @@ export class EndScene extends Scene {
 
   onEnter(params?: unknown): void {
     const typed = params as EndSceneParams | undefined
-    const won = typed?.won ?? true
-    const winnerUsername = typed?.winnerUsername ?? ''
     this.roomCode = typed?.code ?? null
     const { canvasWidth, canvasHeight } = this.game.layout
 
+    // Title varies by end reason. All-dead has no winner, so the title carries
+    // the whole message and the subtitle is left empty.
+    const allDead = typed?.reason === 'all-dead'
+    const won = typed?.reason === 'arrival' ? typed.won : false
+    const winnerUsername =
+      typed?.reason === 'arrival' ? typed.winnerUsername : ''
+    const titleText = allDead ? 'Vous êtes tous morts !' : won ? 'Gagné !' : 'Perdu'
+    // Smaller font for the all-dead title so the longer sentence still fits on
+    // narrow screens without wrapping.
+    const titleFontSize = allDead ? 56 : 80
+
     this.message = new Text({
-      text: won ? 'Gagné !' : 'Perdu',
-      style: { fill: 0xfff700, fontSize: 80, fontFamily: 'Space Mono, monospace' },
+      text: titleText,
+      style: { fill: 0xfff700, fontSize: titleFontSize, fontFamily: 'Space Mono, monospace' },
     })
     this.message.anchor.set(0.5)
     this.message.position.set(canvasWidth / 2, canvasHeight / 2 - 60)
@@ -46,7 +61,7 @@ export class EndScene extends Scene {
 
     // Subtitle naming the winner. Shown to both the winner and the losers —
     // even the winner sees their own pseudo (sanity check that the right
-    // identity was registered server-side).
+    // identity was registered server-side). Empty when no one won.
     this.subtitle = new Text({
       text: winnerUsername ? `${winnerUsername} a gagné` : '',
       style: { fill: 0xffffff, fontSize: 24, fontFamily: 'Space Mono, monospace' },

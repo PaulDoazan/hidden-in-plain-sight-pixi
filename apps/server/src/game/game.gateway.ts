@@ -148,11 +148,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (result.hit) {
       // Bots have no entry in the usernames map → usernameFor returns ''.
       // Only attach `username` when it's a real player so the client can
-      // distinguish "show death banner" from "silent bot kill".
+      // distinguish "show death banner" from "silent bot kill". The shooter
+      // is always a real player (sockets only), so killerUsername is attached
+      // alongside the victim's username for the kill-feed banner.
       const username = ctx.room.usernameFor(result.hit.targetId)
+      const killerUsername = ctx.room.usernameFor(socket.id)
       this.server.to(ctx.code).emit('player-killed', {
         id: result.hit.targetId,
-        ...(username ? { username } : {}),
+        ...(username ? { username, killerUsername } : {}),
       })
     }
   }
@@ -174,14 +177,19 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         this.stopTickLoop(code)
         return
       }
-      const winner = room.tickAndCheckWinner()
+      const result = room.tickAndCheckWinner()
       this.server.to(code).emit('state', room.snapshotState())
-      if (winner) {
+      if (result) {
         this.stopTickLoop(code)
-        this.server.to(code).emit('game-ended', {
-          winnerId: winner.winnerId,
-          winnerUsername: room.usernameFor(winner.winnerId),
-        })
+        if (result.reason === 'arrival') {
+          this.server.to(code).emit('game-ended', {
+            reason: 'arrival',
+            winnerId: result.winnerId,
+            winnerUsername: room.usernameFor(result.winnerId),
+          })
+        } else {
+          this.server.to(code).emit('game-ended', { reason: 'all-dead' })
+        }
         this.broadcastLobby(code)
       }
     }, intervalMs)

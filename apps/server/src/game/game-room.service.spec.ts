@@ -173,20 +173,16 @@ describe('GameRoomService — start', () => {
     }
   })
 
-  it('assigns zombie types in a stable cycle keyed by player id', () => {
+  it('assigns each zombie a random type drawn from the valid set', () => {
     room.addPlayer('a')
     room.addPlayer('b')
     room.addPlayer('c')
     room.addPlayer('d')
     const result = room.start('a')!
-    // Players are inserted into the snapshot in shuffled spawn order to
-    // randomize their placement among bots, so the array order is no longer
-    // join order — assertions go by id.
-    const byId = new Map(result.players.map((p) => [p.id, p.type]))
-    expect(byId.get('a')).toBe('man')
-    expect(byId.get('b')).toBe('woman')
-    expect(byId.get('c')).toBe('wild')
-    expect(byId.get('d')).toBe('man')
+    const valid: ReadonlySet<string> = new Set(['man', 'woman', 'wild'])
+    for (const p of [...result.players, ...result.bots]) {
+      expect(valid.has(p.type)).toBe(true)
+    }
   })
 
   it('refuses a second start call once the room is running', () => {
@@ -334,14 +330,24 @@ describe('GameRoomService — win condition', () => {
     // Teleport 'a' just past the line so the next tick triggers the check.
     room.teleportForTest('a', ARRIVAL_LINE_X + 1)
     const winner = room.tickAndCheckWinner()
-    expect(winner).toEqual({ winnerId: 'a' })
+    expect(winner).toEqual({ reason: 'arrival', winnerId: 'a' })
     expect(room.snapshotLobby().status).toBe('ended')
   })
 
-  it('ignores dead players for the arrival check', () => {
+  it('keeps the game running while at least one player is still alive', () => {
+    // 'b' is still alive — only 'a' is dead and past the line. The dead-past-
+    // line case must not be confused with the all-dead end condition.
     room.killForTest('a')
     room.teleportForTest('a', ARRIVAL_LINE_X + 1)
     expect(room.tickAndCheckWinner()).toBeNull()
+  })
+
+  it('ends the game with reason "all-dead" when every connected player dies', () => {
+    room.killForTest('a')
+    room.killForTest('b')
+    const result = room.tickAndCheckWinner()
+    expect(result).toEqual({ reason: 'all-dead' })
+    expect(room.snapshotLobby().status).toBe('ended')
   })
 })
 

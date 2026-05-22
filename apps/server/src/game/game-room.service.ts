@@ -231,14 +231,34 @@ export class GameRoomService {
     }
   }
 
-  // Convenience method: tick + arrival-line check, used by the gateway loop.
-  tickAndCheckWinner(): { winnerId: string } | null {
+  // Convenience method: tick + end-of-game check, used by the gateway loop.
+  // Two end conditions:
+  //   - a player crosses the arrival line → that player wins
+  //   - every connected player is dead → game ends with no winner
+  // Bots never count for either: only entries in `this.players` are inspected.
+  tickAndCheckWinner():
+    | { reason: 'arrival'; winnerId: string }
+    | { reason: 'all-dead' }
+    | null {
     if (this.status !== 'running') return null
     this.tick()
     for (const p of this.players.values()) {
       if (p.isAlive && p.x >= ARRIVAL_LINE_X) {
         this.status = 'ended'
-        return { winnerId: p.id }
+        return { reason: 'arrival', winnerId: p.id }
+      }
+    }
+    if (this.players.size > 0) {
+      let anyAlive = false
+      for (const p of this.players.values()) {
+        if (p.isAlive) {
+          anyAlive = true
+          break
+        }
+      }
+      if (!anyAlive) {
+        this.status = 'ended'
+        return { reason: 'all-dead' }
       }
     }
     return null
@@ -322,7 +342,7 @@ export class GameRoomService {
     const cycleRange = BOT_MAX_TICK - BOT_MIN_TICK
     return {
       id: `bot-${i}`,
-      type: TYPES[i % TYPES.length]!,
+      type: this.pickType(),
       x: this.spawnX(),
       y: this.spawnY(),
       animation: 'idle',
@@ -330,6 +350,10 @@ export class GameRoomService {
       canMove: false,
       countTick: Math.floor(this.rng() * cycleRange) + BOT_MIN_TICK,
     }
+  }
+
+  private pickType(): ZombieType {
+    return TYPES[Math.floor(this.rng() * TYPES.length)]!
   }
 
   private spawnX(): number {
@@ -372,7 +396,7 @@ export class GameRoomService {
     const y = this.spawnY()
     return {
       id,
-      type: TYPES[index % TYPES.length]!,
+      type: this.pickType(),
       x,
       y,
       animation: 'idle',

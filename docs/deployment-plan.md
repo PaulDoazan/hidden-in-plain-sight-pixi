@@ -131,18 +131,13 @@ Guide de déploiement progressif pour _Hidden in Plain Sight_, conçu pour être
 
 **Objectif** : `api.marche-ou-creve.com` est joignable en HTTPS et le jeu est jouable de bout en bout.
 
-- [ ] Installer Caddy sur l'EC2 (`sudo apt install caddy`)
-- [ ] Écrire un `/etc/caddy/Caddyfile` minimal :
-  ```
-  api.marche-ou-creve.com {
-      reverse_proxy localhost:3000
-  }
-  ```
-- [ ] Dans Cloudflare DNS : ajouter `api` → A record vers l'IP elastic, **proxy désactivé** (cloud gris) pour laisser Caddy gérer le certificat directement avec Let's Encrypt
-- [ ] Démarrer Caddy : `sudo systemctl enable --now caddy`
-- [ ] Vérifier : `curl https://api.marche-ou-creve.com` retourne du contenu
-- [ ] Ouvrir `https://game.marche-ou-creve.com` dans un navigateur, créer une room, vérifier que le WebSocket se connecte
-- [ ] (Optionnel) une fois validé, réactiver le proxy Cloudflare et passer en mode SSL "Full strict"
+- [x] Installer Caddy v2.11.3 sur l'EC2 via le repo officiel cloudsmith (le paquet Ubuntu universe est trop ancien) — voir bloc de commandes dans l'historique de la session J7
+- [x] Caddyfile minimal commité à la racine ([Caddyfile](Caddyfile)) avec `email p.doazan@lehibou.com` (global) + `reverse_proxy localhost:3000` pour `api.marche-ou-creve.com`, scp'd vers `/etc/caddy/Caddyfile`
+- [x] Cloudflare DNS : A record `api` → `15.237.242.223`, **proxy désactivé (DNS only)** — confirmé avec `dig` qui retourne l'IP réelle (pas une IP CF)
+- [x] Démarrer Caddy : `sudo systemctl reload caddy` (Caddy s'auto-démarre à l'install via dpkg, donc reload suffit après scp du Caddyfile)
+- [x] Vérifier : `curl https://api.marche-ou-creve.com` → HTTP 200, certif Let's Encrypt valide jusqu'au 2026-08-18, redirect HTTP→HTTPS 308 auto, Socket.IO handshake OK
+- [x] Ouvrir `https://game.marche-ou-creve.com` dans un navigateur, créer une room, vérifier que le WebSocket se connecte → testé bout en bout, tout vert
+- [ ] (Optionnel) une fois validé, réactiver le proxy Cloudflare et passer en mode SSL "Full strict" — à faire plus tard quand on voudra du caching/DDoS CF devant l'API
 
 **Livrable** : jeu jouable en multi de bout en bout sur le domaine prod.
 
