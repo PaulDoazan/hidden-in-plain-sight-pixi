@@ -8,7 +8,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      CORS_ORIGIN: https://game.marche-ou-creve.com
+      # Migration game. -> apex : les deux origines acceptées le temps de basculer.
+      # Retirer https://game.marche-ou-creve.com une fois l'apex en place.
+      CORS_ORIGIN: https://game.marche-ou-creve.com,https://marche-ou-creve.com
     logging:
       driver: json-file
       options:

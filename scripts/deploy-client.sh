@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deploys apps/client to S3 static-website bucket fronting game.marche-ou-creve.com.
+# Deploys apps/client to S3 static-website bucket fronting marche-ou-creve.com.
 # Requires: AWS CLI with profile `deploy`, pnpm.
+# Override the target during migration: BUCKET=game.marche-ou-creve.com ./scripts/deploy-client.sh
 
-BUCKET="${BUCKET:-game.marche-ou-creve.com}"
+BUCKET="${BUCKET:-marche-ou-creve.com}"
 PROFILE="${AWS_PROFILE:-deploy}"
 REGION="${AWS_REGION:-eu-west-3}"
 
@@ -31,4 +32,4 @@ aws s3 sync apps/client/dist/ "s3://$BUCKET/" \
   --exclude "assets/*" \
   --cache-control "no-cache"
 
-echo "==> Done. https://game.marche-ou-creve.com"
+echo "==> Done. https://$BUCKET"
