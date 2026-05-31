@@ -52,13 +52,21 @@ const CROSSHAIR_PALETTE: number[] = [
 const BOT_MIN_TICK = 20
 const BOT_MAX_TICK = 100
 
-// Vertical placement: every zombie — host included — draws a random y from
-// the same band so a real player can't be spotted from their position alone.
+// Vertical placement band. Zombies are spread evenly across it with stratified
+// sampling (see spawnY) rather than pure random, so they don't clump with big
+// gaps. Anonymity is preserved because the player/bot lineup is shuffled before
+// y is assigned, so a real player's row is still indistinguishable from a bot's.
 // Top limit is two fifths of the world height, matching the dashed arrival
-// line; bottom limit sits near the bottom edge so zombies fill the lower
-// part of the screen, leaving only a thin bottom margin.
-const SPAWN_Y_MIN = WORLD_HEIGHT * (2 / 5)
-const SPAWN_Y_MAX = WORLD_HEIGHT * 0.95
+// line. Bottom limit reaches 80 units past the world's bottom edge to stretch
+// the spread lower into the background shown below the world on wide (e.g.
+// 16:9) screens. Trade-off: on phones whose ratio matches the world (iPhone
+// landscape) the lowest zombies are clipped at the bottom — accepted on
+// purpose. The top limit is unchanged so the highest zombie sits as before.
+export const SPAWN_Y_MIN = WORLD_HEIGHT * (2 / 5)
+export const SPAWN_Y_MAX = WORLD_HEIGHT + 80
+// Within each zombie's equal vertical sub-band, y lands in this central
+// fraction (0.2…0.8). Keeps the spread regular while avoiding a rigid grid.
+const SPAWN_Y_JITTER = 0.6
 
 interface BotInternalState extends BotState {
   canMove: boolean
@@ -168,13 +176,17 @@ export class GameRoomService {
     }
     this.shuffle(slots)
 
-    for (const slot of slots) {
+    // y is stratified over the shuffled lineup: each slot gets its own equal
+    // vertical sub-band, so the spread is even across players and bots alike.
+    const total = slots.length
+    slots.forEach((slot, k) => {
+      const y = this.spawnY(k, total)
       if (slot.kind === 'player') {
-        this.players.set(slot.id, this.spawnPlayer(slot.id, slot.index))
+        this.players.set(slot.id, this.spawnPlayer(slot.id, slot.index, y))
       } else {
-        this.bots.push(this.spawnBot(slot.index))
+        this.bots.push(this.spawnBot(slot.index, y))
       }
-    }
+    })
 
     this.status = 'running'
     return {
@@ -358,13 +370,13 @@ export class GameRoomService {
     return this.bots
   }
 
-  private spawnBot(i: number): BotInternalState {
+  private spawnBot(i: number, y: number): BotInternalState {
     const cycleRange = BOT_MAX_TICK - BOT_MIN_TICK
     return {
       id: `bot-${i}`,
       type: this.pickType(),
       x: this.spawnX(),
-      y: this.spawnY(),
+      y,
       animation: 'idle',
       isAlive: true,
       canMove: false,
@@ -380,8 +392,15 @@ export class GameRoomService {
     return SPAWN_BAND_X + this.rng() * SPAWN_BAND_WIDTH
   }
 
-  private spawnY(): number {
-    return SPAWN_Y_MIN + this.rng() * (SPAWN_Y_MAX - SPAWN_Y_MIN)
+  // Stratified y: the band is split into `total` equal sub-bands and the
+  // `index`-th zombie lands in its own sub-band, within the central
+  // SPAWN_Y_JITTER fraction. Even coverage, no clumps or big gaps, but not a
+  // rigid line. `index` walks the already-shuffled lineup, so it leaks no
+  // player/bot info.
+  private spawnY(index: number, total: number): number {
+    const step = (SPAWN_Y_MAX - SPAWN_Y_MIN) / total
+    const offset = (1 - SPAWN_Y_JITTER) / 2 + this.rng() * SPAWN_Y_JITTER
+    return SPAWN_Y_MIN + (index + offset) * step
   }
 
   private tickBots(): void {
@@ -411,9 +430,8 @@ export class GameRoomService {
     return this.bots.map(({ canMove: _c, countTick: _t, ...rest }) => rest)
   }
 
-  private spawnPlayer(id: string, index: number): PlayerState {
+  private spawnPlayer(id: string, index: number, y: number): PlayerState {
     const x = this.spawnX()
-    const y = this.spawnY()
     return {
       id,
       type: this.pickType(),

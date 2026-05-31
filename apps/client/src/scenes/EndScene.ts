@@ -8,6 +8,16 @@ import { Button } from '../ui/Button'
 import { GameScene } from './GameScene'
 import { Scene } from './Scene'
 
+// Small empty band, in pixels, kept around the screen midline so the result
+// column (left) and the leaderboard column (right) don't touch.
+const COLUMN_GUTTER = 24
+// Margin kept from the screen edges.
+const OUTER_MARGIN = 24
+// Left-most / right-most x of the leaderboard content, relative to its
+// container origin. Must match the row offsets used in buildLeaderboard.
+const LEADERBOARD_LEFT_EDGE = -160
+const LEADERBOARD_RIGHT_EDGE = 200
+
 export type EndSceneParams =
   | {
       reason: 'arrival'
@@ -37,17 +47,32 @@ export class EndScene extends Scene {
     super()
   }
 
+  // Two-column geometry. The leaderboard prefers a balanced spot just right of
+  // a small central gutter, but is clamped so its right-most text never runs
+  // off the screen edge (tight on mobile). The result column is then centered
+  // in whatever space is left, minus the gutter.
+  private columnLayout(): { leftX: number; leaderboardX: number } {
+    const { canvasWidth } = this.game.layout
+    const centerX = canvasWidth / 2
+    const preferredX = centerX + COLUMN_GUTTER / 2 - LEADERBOARD_LEFT_EDGE
+    const maxX = canvasWidth - OUTER_MARGIN - LEADERBOARD_RIGHT_EDGE
+    const leaderboardX = Math.min(preferredX, maxX)
+    const leftRegionRight = leaderboardX + LEADERBOARD_LEFT_EDGE - COLUMN_GUTTER
+    const leftX = (OUTER_MARGIN + leftRegionRight) / 2
+    return { leftX, leaderboardX }
+  }
+
   onEnter(params?: unknown): void {
     const typed = params as EndSceneParams | undefined
     this.roomCode = typed?.code ?? null
     this.leaderboardEntries = typed?.leaderboard ?? []
-    const { canvasWidth, canvasHeight } = this.game.layout
-    const leftX = canvasWidth * 0.3
+    const { canvasHeight } = this.game.layout
+    const { leftX } = this.columnLayout()
     const allDead = typed?.reason === 'all-dead'
     const won = typed?.reason === 'arrival' ? typed.won : false
     const winnerUsername =
       typed?.reason === 'arrival' ? typed.winnerUsername : ''
-    const titleText = allDead ? 'Vous êtes tous morts !' : won ? 'Gagné !' : 'Perdu'
+    const titleText = allDead ? 'Vous êtes tous morts !' : won ? 'Gagné' : 'Perdu'
     const titleFontSize = allDead ? 56 : 80
 
     this.message = new Text({
@@ -76,11 +101,11 @@ export class EndScene extends Scene {
 
   private buildLeaderboard(): void {
     if (this.leaderboardEntries.length === 0) return
-    const { canvasWidth, canvasHeight } = this.game.layout
-    const rightX = canvasWidth * 0.7
+    const { canvasHeight } = this.game.layout
+    const { leaderboardX } = this.columnLayout()
 
     const container = new Container()
-    container.position.set(rightX, canvasHeight / 2)
+    container.position.set(leaderboardX, canvasHeight / 2)
 
     const header = new Text({
       text: 'Classement',
@@ -100,7 +125,7 @@ export class EndScene extends Scene {
     container.addChild(header)
 
     // Column offsets (relative to the container's centre).
-    const rankX = -160
+    const rankX = LEADERBOARD_LEFT_EDGE
     const nameX = -120
     const ptsX = 60
     const deltaX = 130
@@ -167,20 +192,20 @@ export class EndScene extends Scene {
   }
 
   override resize(_layout: Layout): void {
-    const { canvasWidth, canvasHeight } = this.game.layout
-    const leftX = canvasWidth * 0.3
+    const { canvasHeight } = this.game.layout
+    const { leftX, leaderboardX } = this.columnLayout()
     this.message?.position.set(leftX, canvasHeight / 2 - 60)
     this.subtitle?.position.set(leftX, canvasHeight / 2 + 10)
     this.replayBtn?.position.set(leftX, canvasHeight / 2 + 80)
     this.hint?.position.set(leftX, canvasHeight / 2 + 80)
     if (this.leaderboardContainer) {
-      this.leaderboardContainer.position.set(canvasWidth * 0.7, canvasHeight / 2)
+      this.leaderboardContainer.position.set(leaderboardX, canvasHeight / 2)
     }
   }
 
   private onLobbyState(payload: LobbyStatePayload): void {
-    const { canvasWidth, canvasHeight } = this.game.layout
-    const leftX = canvasWidth * 0.3
+    const { canvasHeight } = this.game.layout
+    const { leftX } = this.columnLayout()
     const me = this.game.net.id
     const isHost = payload.players.some((p) => p.id === me && p.isHost)
 

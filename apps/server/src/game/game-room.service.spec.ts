@@ -6,10 +6,14 @@ import {
   SPAWN_BAND_X,
   WALK_SPEED,
   RUN_SPEED,
-  WORLD_HEIGHT,
 } from '@hips/shared'
 
-import { BULLETS_PER_PLAYER, GameRoomService } from './game-room.service'
+import {
+  BULLETS_PER_PLAYER,
+  GameRoomService,
+  SPAWN_Y_MAX,
+  SPAWN_Y_MIN,
+} from './game-room.service'
 
 describe('GameRoomService — lobby', () => {
   let room: GameRoomService
@@ -139,8 +143,8 @@ describe('GameRoomService — start', () => {
     for (const p of result!.players) {
       expect(p.x).toBeGreaterThanOrEqual(SPAWN_BAND_X)
       expect(p.x).toBeLessThanOrEqual(SPAWN_BAND_X + SPAWN_BAND_WIDTH)
-      expect(p.y).toBeGreaterThan(0)
-      expect(p.y).toBeLessThan(WORLD_HEIGHT)
+      expect(p.y).toBeGreaterThanOrEqual(SPAWN_Y_MIN)
+      expect(p.y).toBeLessThanOrEqual(SPAWN_Y_MAX)
       expect(p.animation).toBe('idle')
       expect(p.isAlive).toBe(true)
       expect(p.bulletsRemaining).toBe(BULLETS_PER_PLAYER)
@@ -153,15 +157,13 @@ describe('GameRoomService — start', () => {
     room.addPlayer('b')
     room.addPlayer('c')
     const result = room.start('a')!
-    const yMin = WORLD_HEIGHT * (2 / 5)
-    const yMax = WORLD_HEIGHT * 0.95
     for (const p of result.players) {
-      expect(p.y).toBeGreaterThanOrEqual(yMin)
-      expect(p.y).toBeLessThanOrEqual(yMax)
+      expect(p.y).toBeGreaterThanOrEqual(SPAWN_Y_MIN)
+      expect(p.y).toBeLessThanOrEqual(SPAWN_Y_MAX)
     }
     for (const b of result.bots) {
-      expect(b.y).toBeGreaterThanOrEqual(yMin)
-      expect(b.y).toBeLessThanOrEqual(yMax)
+      expect(b.y).toBeGreaterThanOrEqual(SPAWN_Y_MIN)
+      expect(b.y).toBeLessThanOrEqual(SPAWN_Y_MAX)
     }
   })
 
