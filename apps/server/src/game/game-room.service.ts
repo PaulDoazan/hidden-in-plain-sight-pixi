@@ -55,9 +55,10 @@ const BOT_MAX_TICK = 100
 // Vertical placement: every zombie — host included — draws a random y from
 // the same band so a real player can't be spotted from their position alone.
 // Top limit is two fifths of the world height, matching the dashed arrival
-// line; bottom limit leaves a small bottom margin.
+// line; bottom limit sits near the bottom edge so zombies fill the lower
+// part of the screen, leaving only a thin bottom margin.
 const SPAWN_Y_MIN = WORLD_HEIGHT * (2 / 5)
-const SPAWN_Y_MAX = WORLD_HEIGHT * 0.9
+const SPAWN_Y_MAX = WORLD_HEIGHT * 0.95
 
 interface BotInternalState extends BotState {
   canMove: boolean

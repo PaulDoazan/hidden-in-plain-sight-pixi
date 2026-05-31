@@ -2,8 +2,11 @@ import {
   ARRIVAL_LINE_X,
   BOT_COUNT,
   SERVER_TICK_HZ,
+  SPAWN_BAND_WIDTH,
+  SPAWN_BAND_X,
   WALK_SPEED,
   RUN_SPEED,
+  WORLD_HEIGHT,
 } from '@hips/shared'
 
 import { BULLETS_PER_PLAYER, GameRoomService } from './game-room.service'
@@ -134,10 +137,10 @@ describe('GameRoomService — start', () => {
     expect(result).not.toBeNull()
     expect(result!.players).toHaveLength(2)
     for (const p of result!.players) {
-      expect(p.x).toBeGreaterThanOrEqual(30)
-      expect(p.x).toBeLessThanOrEqual(50)
+      expect(p.x).toBeGreaterThanOrEqual(SPAWN_BAND_X)
+      expect(p.x).toBeLessThanOrEqual(SPAWN_BAND_X + SPAWN_BAND_WIDTH)
       expect(p.y).toBeGreaterThan(0)
-      expect(p.y).toBeLessThan(886)
+      expect(p.y).toBeLessThan(WORLD_HEIGHT)
       expect(p.animation).toBe('idle')
       expect(p.isAlive).toBe(true)
       expect(p.bulletsRemaining).toBe(BULLETS_PER_PLAYER)
@@ -150,8 +153,8 @@ describe('GameRoomService — start', () => {
     room.addPlayer('b')
     room.addPlayer('c')
     const result = room.start('a')!
-    const yMin = 886 * (2 / 5)
-    const yMax = 886 * 0.9
+    const yMin = WORLD_HEIGHT * (2 / 5)
+    const yMax = WORLD_HEIGHT * 0.95
     for (const p of result.players) {
       expect(p.y).toBeGreaterThanOrEqual(yMin)
       expect(p.y).toBeLessThanOrEqual(yMax)
@@ -168,8 +171,8 @@ describe('GameRoomService — start', () => {
     const result = room.start('a')!
     const xs = [...result.players, ...result.bots].map((p) => p.x)
     for (const x of xs) {
-      expect(x).toBeGreaterThanOrEqual(30)
-      expect(x).toBeLessThanOrEqual(50)
+      expect(x).toBeGreaterThanOrEqual(SPAWN_BAND_X)
+      expect(x).toBeLessThanOrEqual(SPAWN_BAND_X + SPAWN_BAND_WIDTH)
     }
   })
 
@@ -405,8 +408,8 @@ describe('GameRoomService — disconnect during running', () => {
     room.addPlayer('b', 'Bruno')
     room.start('a')
     // Teleport 'a' far past the bot spawn band (x=1500) so no bot can
-    // intercept the shot — wild bots have a wide AABB that extends left of
-    // SPAWN_BAND_X, so x=0 is not safe.
+    // intercept the shot — bots spawn around SPAWN_BAND_X (x≈180..200) with a
+    // wide AABB, so a target must sit well to the right of them.
     room.teleportForTest('a', 1500)
     const victim = room.snapshotState().players.find((p) => p.id === 'a')!
     room.fire('b', { x: victim.x, y: victim.y - 10 })
@@ -545,8 +548,8 @@ describe('GameRoomService — bots', () => {
     room.addPlayer('b', 'Bruno')
     room.start('a')
     // Teleport Bruno well past the spawn band so no bot can intercept the
-    // shot — wild bots spawn at x=30..50 and their AABB (width 75) extends
-    // left to x≈-7, so x=0 is NOT safe. x=1500 is well outside any bot AABB.
+    // shot — bots spawn at x≈180..200 with a wide AABB. x=1500 is well outside
+    // any bot AABB.
     room.teleportForTest('b', 1500)
     const victim = room.snapshotState().players.find((p) => p.id === 'b')!
     const result = room.fire('a', { x: victim.x, y: victim.y - 10 })
@@ -615,9 +618,9 @@ describe('GameRoomService — leaderboard snapshot', () => {
     room.setBulletsForTest('a', 10)
     room.setBulletsForTest('b', 10)
     // 'b' kills 'a' → b: total 2. Teleport each victim to x=1500 (well past
-    // the bot spawn band) before firing — bots spawn at x=30..50 and wild
-    // types have AABB width=75 so their left edge is at x≈-7, making x=0
-    // unsafe. Positions are captured after the teleport.
+    // the bot spawn band) before firing — bots spawn at x≈180..200 with a wide
+    // AABB, so a victim must sit well to their right. Positions are captured
+    // after the teleport.
     room.teleportForTest('a', 1500)
     const aPos = room.snapshotState().players.find((p) => p.id === 'a')!
     room.fire('b', { x: aPos.x, y: aPos.y - 10 })

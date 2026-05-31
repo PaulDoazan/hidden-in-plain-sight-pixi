@@ -28,9 +28,11 @@ export const WALK_SPEED = 0.8
 export const RUN_SPEED = 2.2
 
 // Spawn positions: every zombie (players + bots) spawns in this narrow x band
-// on the left edge. The 20-unit width gives enough jitter to avoid a perfectly
-// straight line without breaking the "lined up at the start" feel.
-export const SPAWN_BAND_X = 30
+// near the left side. The left offset leaves room for the bottom-left mobile
+// control buttons so they never sit on top of a spawned zombie; on desktop it
+// is just empty ground. The 20-unit width gives enough jitter to avoid a
+// perfectly straight line without breaking the "lined up at the start" feel.
+export const SPAWN_BAND_X = 180
 export const SPAWN_BAND_WIDTH = 20
 
 // ─── Zombie + game-state types ────────────────────────────────────────────

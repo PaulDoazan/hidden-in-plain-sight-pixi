@@ -29,6 +29,10 @@ import { WaitingRoomOverlay } from '../ui/WaitingRoomOverlay'
 import { EndScene } from './EndScene'
 import { Scene } from './Scene'
 
+// Max gap between two taps on the play surface for them to count as a
+// double-tap (which fires on mobile).
+const DOUBLE_TAP_MS = 300
+
 export class GameScene extends Scene {
   private bgLayer!: Container
   private gameLayer!: Container
@@ -62,6 +66,10 @@ export class GameScene extends Scene {
     number,
     { move: (e: PointerEvent) => void; up: (e: PointerEvent) => void }
   >()
+  // Timestamp of the last touch on the play surface. Two taps within
+  // DOUBLE_TAP_MS fire (mobile has no dedicated fire button — see
+  // onTouchSurfaceDown).
+  private lastTapAt = 0
   // Top-screen kill-feed banners ("BANG ! A a tué B"). New banners stack
   // below older ones; each is shown opaque for 3 s then fades over the 4th
   // second. Bots dying is silent (gateway omits `username` for bot kills)
@@ -143,7 +151,7 @@ export class GameScene extends Scene {
     }
   }
 
-  update(_delta: number): void {
+  update(delta: number): void {
     // Banners tick on real time, independent of the gameStarted gate, so a
     // banner already on screen keeps fading even if the game just ended.
     this.updateDeathBanners()
@@ -163,7 +171,10 @@ export class GameScene extends Scene {
       })
     }
 
-    for (const z of this.remoteZombies.values()) z.zIndex = z.y
+    for (const z of this.remoteZombies.values()) {
+      z.update(delta)
+      z.zIndex = z.y
+    }
   }
 
   override resize(_layout: Layout): void {
@@ -198,7 +209,7 @@ export class GameScene extends Scene {
         .rect(0, 0, canvasWidth, canvasHeight)
         .fill({ color: 0x000000, alpha: 0 })
     }
-    this.mobileControls?.resize(canvasHeight)
+    this.mobileControls?.resize(canvasWidth, canvasHeight)
   }
 
   private setupMobileUI(): void {
@@ -218,6 +229,7 @@ export class GameScene extends Scene {
     this.addChildAt(this.touchSurface, 1)
 
     this.mobileControls = new MobileControls({
+      canvasWidth,
       canvasHeight,
       onWalkDown: () => this.game.input.setVirtualSpace(true),
       onWalkUp: () => this.game.input.setVirtualSpace(false),
@@ -229,7 +241,6 @@ export class GameScene extends Scene {
         this.game.input.setVirtualSpace(false)
         this.game.input.setVirtualShift(false)
       },
-      onFire: () => this.game.input.triggerFire(),
     })
     this.addChild(this.mobileControls)
   }
@@ -261,6 +272,17 @@ export class GameScene extends Scene {
     if (event.pointerType !== 'touch') return
     const pid = event.pointerId
     this.game.input.setPointer(event.global.x, event.global.y)
+
+    // Double-tap fires: the crosshair was just snapped to this tap above, so a
+    // quick second tap shoots wherever the finger last landed. Reset on fire so
+    // a third tap starts a fresh pair rather than re-firing immediately.
+    const now = Date.now()
+    if (now - this.lastTapAt <= DOUBLE_TAP_MS) {
+      this.game.input.triggerFire()
+      this.lastTapAt = 0
+    } else {
+      this.lastTapAt = now
+    }
 
     const move = (e: PointerEvent) => {
       if (e.pointerId !== pid) return
@@ -634,6 +656,9 @@ export class GameScene extends Scene {
       frameCounts: this.zombieFrameCounts(state.type),
     })
     zombie.scale.set(this.game.layout.zombieScale)
+    // Local player snaps to server position; bots and other players lerp
+    // between snapshots to hide the 30 Hz tick on a 60 Hz render loop.
+    zombie.setInterpolated(state.id !== this.game.net.id)
     zombie.applyServerState(state)
     return zombie
   }
