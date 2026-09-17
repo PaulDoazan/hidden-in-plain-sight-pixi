@@ -155,7 +155,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const killerUsername = ctx.room.usernameFor(socket.id)
       this.server.to(ctx.code).emit('player-killed', {
         id: result.hit.targetId,
-        ...(username ? { username, killerUsername } : {}),
+        ...(username ? { username, killerUsername, killerId: socket.id } : {}),
       })
     }
   }

@@ -78,6 +78,20 @@ export class GameScene extends Scene {
   private deathBanners: { container: Container; addedAt: number }[] = []
   private static readonly DEATH_BANNER_DURATION_MS = 4000
   private static readonly DEATH_BANNER_FADE_MS = 1000
+  // First banner is centered 130 px from the top; each following row is offset
+  // by its own height + this margin, so rows never visually touch even when
+  // their content widths differ.
+  private static readonly DEATH_BANNER_TOP = 130
+  private static readonly DEATH_BANNER_MARGIN = 12
+  // "+1 balle" flash shown under the kill-feed banners when this player kills
+  // another player. It can't be driven off the bullet counter: the server
+  // spends and refunds the bullet inside one `fire()` call, so
+  // `bulletsRemaining` looks unchanged across snapshots. The `player-killed`
+  // event is the only signal.
+  private bulletRewardFlash: Text | null = null
+  private bulletRewardShownAt = 0
+  private static readonly BULLET_FLASH_DURATION_MS = 1500
+  private static readonly BULLET_FLASH_FADE_MS = 750
 
   constructor(private readonly game: Game) {
     super()
@@ -121,6 +135,8 @@ export class GameScene extends Scene {
     this.deathBanners = []
     this.deathBannerLayer?.destroy({ children: true })
     this.deathBannerLayer = null
+    this.bulletRewardFlash?.destroy()
+    this.bulletRewardFlash = null
     if (this.lobbyHandler) {
       this.game.net.off('lobby-state', this.lobbyHandler)
       this.lobbyHandler = null
@@ -155,6 +171,7 @@ export class GameScene extends Scene {
     // Banners tick on real time, independent of the gameStarted gate, so a
     // banner already on screen keeps fading even if the game just ended.
     this.updateDeathBanners()
+    this.updateBulletRewardFlash()
     if (!this.gameStarted) return
     this.crosshair.position.set(this.game.input.pointer.x, this.game.input.pointer.y)
     this.worldPointer = this.gameLayer.toLocal({
@@ -320,6 +337,57 @@ export class GameScene extends Scene {
         : `${payload.username} est mort`
       this.addDeathBanner(text)
     }
+    // killerId is only set for player-on-player kills, so a bot kill never
+    // reaches here — the reward is player kills only.
+    if (payload.killerId && payload.killerId === this.game.net.id) {
+      this.showBulletReward()
+    }
+  }
+
+  private showBulletReward(): void {
+    if (!this.bulletRewardFlash) {
+      this.bulletRewardFlash = new Text({
+        text: '+1 balle',
+        style: {
+          fill: 0x4ade80,
+          fontSize: 40,
+          fontFamily: 'Space Mono, monospace',
+          fontWeight: 'bold',
+        },
+      })
+      this.bulletRewardFlash.anchor.set(0.5)
+      this.addChild(this.bulletRewardFlash)
+    }
+    this.positionBulletRewardFlash()
+    this.bulletRewardFlash.alpha = 1
+    this.bulletRewardFlash.visible = true
+    // A second kill within the window restarts the flash rather than stacking.
+    this.bulletRewardShownAt = Date.now()
+  }
+
+  // Sits centered just below the kill-feed banner stack, so the reward reads
+  // as a follow-up to "BANG ! ... a tué ...". repositionDeathBanners() calls
+  // this too, which keeps the flash glued to the stack as banners expire or
+  // the viewport resizes.
+  private positionBulletRewardFlash(): void {
+    const flash = this.bulletRewardFlash
+    if (!flash) return
+    flash.position.set(this.game.layout.canvasWidth / 2, this.deathBannerStackBottom())
+  }
+
+  private updateBulletRewardFlash(): void {
+    const flash = this.bulletRewardFlash
+    if (!flash || !flash.visible) return
+    const age = Date.now() - this.bulletRewardShownAt
+    if (age >= GameScene.BULLET_FLASH_DURATION_MS) {
+      flash.visible = false
+      return
+    }
+    const fadeStart = GameScene.BULLET_FLASH_DURATION_MS - GameScene.BULLET_FLASH_FADE_MS
+    flash.alpha =
+      age < fadeStart
+        ? 1
+        : (GameScene.BULLET_FLASH_DURATION_MS - age) / GameScene.BULLET_FLASH_FADE_MS
   }
 
   private addDeathBanner(message: string): void {
@@ -380,18 +448,24 @@ export class GameScene extends Scene {
   }
 
   private repositionDeathBanners(): void {
-    const { canvasWidth } = this.game.layout
-    const cx = canvasWidth / 2
-    // First banner sits 130 px from top. Each subsequent banner is offset by
-    // its own height + a 12 px margin, so stacked banners never visually
-    // touch even if their content widths differ.
-    const top = 130
-    const margin = 12
-    let y = top
+    const cx = this.game.layout.canvasWidth / 2
+    let y = GameScene.DEATH_BANNER_TOP
     this.deathBanners.forEach((banner) => {
       banner.container.position.set(cx, y)
-      y += banner.container.height + margin
+      y += banner.container.height + GameScene.DEATH_BANNER_MARGIN
     })
+    this.positionBulletRewardFlash()
+  }
+
+  // Y of the next free slot under the banner stack — where the "+1 balle"
+  // flash goes. Banners are centered on their position, so a slot is the
+  // center of the row that would come next.
+  private deathBannerStackBottom(): number {
+    let y = GameScene.DEATH_BANNER_TOP
+    for (const banner of this.deathBanners) {
+      y += banner.container.height + GameScene.DEATH_BANNER_MARGIN
+    }
+    return y
   }
 
   private onPlayerLeft(payload: PlayerLeftPayload): void {

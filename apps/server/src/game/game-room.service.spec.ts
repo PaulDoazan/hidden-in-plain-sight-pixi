@@ -283,8 +283,10 @@ describe('GameRoomService — fire', () => {
     const after = room.snapshotState()
     expect(after.players.find((p) => p.id === 'b')!.isAlive).toBe(false)
     expect(after.players.find((p) => p.id === 'b')!.animation).toBe('die')
+    // The bullet is spent, then the player-kill reward gives one back, so a
+    // player kill nets zero. Bot kills still cost a bullet (see the bots suite).
     expect(after.players.find((p) => p.id === 'a')!.bulletsRemaining).toBe(
-      BULLETS_PER_PLAYER - 1,
+      BULLETS_PER_PLAYER,
     )
   })
 
@@ -314,6 +316,54 @@ describe('GameRoomService — fire', () => {
     expect(result).not.toBeNull()
     expect(result!.hit).toEqual({ targetId: 'b' })
     expect(room.snapshotState().players.find((p) => p.id === 'b')!.isAlive).toBe(false)
+  })
+
+  // Bullet reward: killing a real player hands the shooter a fresh bullet, so
+  // a good shot keeps them in the game. Each test pins the magazine to 1 first
+  // so the assertions hold regardless of how BULLETS_PER_PLAYER is tuned.
+  it('rewards a bullet when the shooter kills another player', () => {
+    room.setBulletsForTest('a', 1)
+    room.teleportForTest('b', 1500)
+    const b = room.snapshotState().players.find((p) => p.id === 'b')!
+    const result = room.fire('a', { x: b.x, y: b.y - 10 })
+    expect(result!.hit).toEqual({ targetId: 'b' })
+    expect(room.snapshotState().players.find((p) => p.id === 'a')!.bulletsRemaining).toBe(1)
+  })
+
+  it('rewards a bullet even when the shooter is already dead', () => {
+    room.killForTest('a')
+    room.setBulletsForTest('a', 1)
+    room.teleportForTest('b', 1500)
+    const b = room.snapshotState().players.find((p) => p.id === 'b')!
+    room.fire('a', { x: b.x, y: b.y - 10 })
+    expect(room.snapshotState().players.find((p) => p.id === 'a')!.bulletsRemaining).toBe(1)
+  })
+
+  it('rewards no bullet on a miss', () => {
+    room.setBulletsForTest('a', 1)
+    const a = room.snapshotState().players.find((p) => p.id === 'a')!
+    const result = room.fire('a', { x: a.x + 1000, y: a.y + 1000 })
+    expect(result!.hit).toBeNull()
+    expect(room.snapshotState().players.find((p) => p.id === 'a')!.bulletsRemaining).toBe(0)
+  })
+
+  it('lets a player chain kills on the reward bullet alone', () => {
+    // Fresh room: players only get a PlayerState at start() time, so the
+    // third player has to join before the game starts.
+    const room = new GameRoomService()
+    room.addPlayer('a')
+    room.addPlayer('b')
+    room.addPlayer('c')
+    room.start('a')
+    room.setBulletsForTest('a', 1)
+    room.teleportForTest('b', 1500)
+    const b = room.snapshotState().players.find((p) => p.id === 'b')!
+    room.fire('a', { x: b.x, y: b.y - 10 })
+    room.teleportForTest('c', 1200)
+    const c = room.snapshotState().players.find((p) => p.id === 'c')!
+    const second = room.fire('a', { x: c.x, y: c.y - 10 })
+    expect(second!.hit).toEqual({ targetId: 'c' })
+    expect(room.snapshotState().players.find((p) => p.id === 'c')!.isAlive).toBe(false)
   })
 })
 

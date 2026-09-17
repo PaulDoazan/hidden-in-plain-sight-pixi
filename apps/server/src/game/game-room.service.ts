@@ -27,6 +27,12 @@ import { findNearestHit } from './collision'
 const TYPES: ZombieType[] = ['man', 'woman', 'wild']
 export const BULLETS_PER_PLAYER = 1
 
+// Bullets handed back to the shooter for killing a real player. Bot kills earn
+// nothing, so spending your shot on the camouflage still costs you the round.
+// With BULLETS_PER_PLAYER at 1 the reward exactly refunds the shot, which is
+// the point: land your shot on a player and you stay armed.
+export const BULLET_REWARD_PER_PLAYER_KILL = 1
+
 // Fixed crosshair palette. Picked to be highly distinguishable on the dim
 // playfield: warm primaries first, then secondaries. Players are assigned
 // colors by spawn index, so a refresh keeps the same player on the same
@@ -334,12 +340,14 @@ export class GameRoomService {
     if (hit) {
       hit.isAlive = false
       hit.animation = 'die'
-      // Player kills earn the shooter +2. Bot kills earn 0 (bots are not in
-      // the leaderboard). `this.players` is the authoritative set of real
-      // players; using it as a guard avoids depending on the id naming
-      // convention `bot-N`.
+      // Player kills earn the shooter +2 and a replacement bullet. Bot kills
+      // earn neither (bots are not in the leaderboard). `this.players` is the
+      // authoritative set of real players; using it as a guard avoids
+      // depending on the id naming convention `bot-N`. Dead shooters are
+      // rewarded too — they can already fire, so the rule stays uniform.
       if (this.players.has(hit.id)) {
         this.creditPoints(shooterId, 2)
+        shooter.bulletsRemaining += BULLET_REWARD_PER_PLAYER_KILL
       }
     }
     return {

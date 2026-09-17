@@ -127,6 +127,12 @@ export interface PlayerKilledPayload {
   // shooter and victim are real players — used by the client to surface the
   // "BANG ! A a tué B" kill-feed banner.
   killerUsername?: string
+  // Socket id of the killer, set under the same condition as killerUsername.
+  // The client compares it against its own id to show the "+1 balle" reward
+  // flash. It can't infer the reward from `bulletsRemaining` instead: the
+  // server spends and refunds the bullet inside a single `fire()` call, so
+  // the count never changes between two snapshots.
+  killerId?: string
 }
 
 // Per-player score row sent at the end of every round. Already sorted by
