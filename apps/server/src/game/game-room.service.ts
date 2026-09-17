@@ -22,6 +22,7 @@ import {
   WORLD_WIDTH,
 } from '@hips/shared'
 
+import type { BotInternalState } from './room-state'
 import { findNearestHit } from './collision'
 
 const TYPES: ZombieType[] = ['man', 'woman', 'wild']
@@ -73,11 +74,6 @@ export const SPAWN_Y_MAX = WORLD_HEIGHT + 80
 // Within each zombie's equal vertical sub-band, y lands in this central
 // fraction (0.2…0.8). Keeps the spread regular while avoiding a rigid grid.
 const SPAWN_Y_JITTER = 0.6
-
-interface BotInternalState extends BotState {
-  canMove: boolean
-  countTick: number
-}
 
 // Per-room state. Owned and instantiated by RoomRegistry; not a Nest provider.
 export class GameRoomService {
