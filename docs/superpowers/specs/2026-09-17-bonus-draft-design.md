@@ -138,6 +138,10 @@ authoritative either way.
 `use-bonus` carries no payload: the server already knows which bonus the
 socket drafted and whether a charge remains.
 
+`bonus-used` has two audiences. The owner always receives it — that is how
+their HUD learns the charge is spent, silent bonuses included. The rest of
+the room receives it only for a revealed bonus (bomb, vest).
+
 ## Server structure
 
 ### `apps/server/src/game/room-state.ts` (new)
