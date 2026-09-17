@@ -81,7 +81,83 @@ export type BotState = ZombieState
 // Number of background bots spawned at game start.
 export const BOT_COUNT = 20
 
-export type RoomStatus = 'waiting' | 'running' | 'ended'
+export type RoomStatus = 'waiting' | 'drafting' | 'running' | 'ended'
+
+// ─── Bonuses ──────────────────────────────────────────────────────────────
+
+export type BonusId = 'bomb' | 'extra-life' | 'vest' | 'skin-swap' | 'magazine' | 'sprint'
+
+// 'active' bonuses are triggered by the player (B key / mobile button);
+// 'passive' ones fire on their own (at spawn, or when the player is hit).
+export type BonusKind = 'passive' | 'active'
+
+export interface BonusInfo {
+  id: BonusId
+  name: string
+  description: string
+  icon: string
+  kind: BonusKind
+  // Kill-feed sentence used when the bonus is revealed to the whole room.
+  // Absent for bonuses that stay silent.
+  usedMessage?: string
+}
+
+// Presentation metadata lives in shared so the client can render draft cards,
+// HUD icons and banners without keeping its own copy of the catalogue in sync.
+export const BONUS_INFO: Record<BonusId, BonusInfo> = {
+  bomb: {
+    id: 'bomb',
+    name: 'Bombe',
+    description: 'À déclencher quand tu veux : tue 20 % des faux zombies.',
+    icon: '💣',
+    kind: 'active',
+    usedMessage: 'a lâché une bombe',
+  },
+  'extra-life': {
+    id: 'extra-life',
+    name: 'Seconde vie',
+    description: 'À ta mort, tu ressuscites dans le corps d’un autre zombie.',
+    icon: '❤️',
+    kind: 'passive',
+  },
+  vest: {
+    id: 'vest',
+    name: 'Gilet',
+    description: 'Le premier tir qui te touche ne te tue pas.',
+    icon: '🛡️',
+    kind: 'passive',
+    usedMessage: 'a encaissé le tir',
+  },
+  'skin-swap': {
+    id: 'skin-swap',
+    name: 'Changement de peau',
+    description: 'À déclencher : tu prends la place et l’apparence d’un autre zombie.',
+    icon: '🎭',
+    kind: 'active',
+  },
+  magazine: {
+    id: 'magazine',
+    name: 'Chargeur',
+    description: 'Tu démarres la manche avec une balle de plus.',
+    icon: '🔫',
+    kind: 'passive',
+  },
+  sprint: {
+    id: 'sprint',
+    name: 'Sprint',
+    description: 'Tu cours 35 % plus vite.',
+    icon: '👟',
+    kind: 'passive',
+  },
+}
+
+// Draw order is the declaration order above; tests rely on it.
+export const BONUS_IDS = Object.keys(BONUS_INFO) as BonusId[]
+
+// Cards offered to each player at the start of a round, and how long they
+// have to pick before the server picks for them.
+export const BONUS_OFFER_SIZE = 3
+export const DRAFT_DURATION_MS = 15_000
 
 export interface InputPayload {
   keys: { space: boolean; shift: boolean }
@@ -161,6 +237,29 @@ export interface PlayerLeftPayload {
   id: string
 }
 
+// Sent socket by socket: each player learns only its own three cards.
+export interface BonusDraftStartedPayload {
+  offer: BonusId[]
+  durationMs: number
+}
+
+// Broadcast: who has already picked, never what they picked.
+export interface BonusDraftProgressPayload {
+  pickedIds: string[]
+}
+
+export interface PickBonusPayload {
+  bonusId: BonusId
+}
+
+// Always sent to the owner (their HUD needs to know the charge is spent);
+// broadcast to the rest of the room only for a revealed bonus.
+export interface BonusUsedPayload {
+  playerId: string
+  username: string
+  bonusId: BonusId
+}
+
 export interface CreateRoomPayload {
   username: string
 }
@@ -194,6 +293,8 @@ export interface ClientToServerEvents {
   replay: () => void // host only, valid in `ended` — resets to `waiting`
   input: (payload: InputPayload) => void
   fire: (payload: FirePayload) => void
+  'pick-bonus': (payload: PickBonusPayload) => void
+  'use-bonus': () => void
 }
 
 // Server → Client
@@ -208,4 +309,7 @@ export interface ServerToClientEvents {
   'player-killed': (payload: PlayerKilledPayload) => void
   'game-ended': (payload: GameEndedPayload) => void
   'player-left': (payload: PlayerLeftPayload) => void
+  'bonus-draft-started': (payload: BonusDraftStartedPayload) => void
+  'bonus-draft-progress': (payload: BonusDraftProgressPayload) => void
+  'bonus-used': (payload: BonusUsedPayload) => void
 }
