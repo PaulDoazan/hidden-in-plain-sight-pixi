@@ -7,6 +7,19 @@ import { Zombie, type ZombieDeps } from './Zombie'
 // Tuned for a 30 Hz server tick: ~12 reaches ~95% of a new target in 250 ms.
 const SMOOTHING_PER_SECOND = 12
 
+// Above this distance (world units) between two consecutive snapshots, a
+// snapshot is treated as a teleport rather than movement, and applied instantly
+// instead of lerped. The two body-swap bonuses (skin-swap, extra-life) relocate
+// a zombie by hundreds of units in a single snapshot; ordinary movement never
+// comes remotely close — even a sprint-boosted run tops out around
+// RUN_SPEED(2.2 px/frame@60fps) * 1.35 * 2 (ticks-per-render-frame at 30 Hz)
+// ≈ 6 world units per snapshot. 50 sits well above the movement ceiling and
+// well below any swap distance. Without this, ~1/3 of swaps (the decoy bot
+// happens to share the player's type, so `reconcileZombie` doesn't rebuild it)
+// would lerp over ~250 ms, visibly gliding two zombies past each other —
+// exactly the tell the swap bonuses exist to avoid.
+const TELEPORT_DISTANCE_SQUARED = 50 * 50
+
 export class PlayerZombie extends Zombie {
   // PlayerZombie no longer reads input directly; it is a pure renderer
   // driven by server state. The Zombie base class handles animation switching
@@ -28,11 +41,16 @@ export class PlayerZombie extends Zombie {
   }
 
   applyServerState(state: ZombieState): void {
+    const dx = state.x - this.x
+    const dy = state.y - this.y
+    const teleported = dx * dx + dy * dy > TELEPORT_DISTANCE_SQUARED
     this.targetX = state.x
     this.targetY = state.y
     // Snap on the very first snapshot (otherwise the sprite would lerp in
-    // from its constructor position) and whenever interpolation is disabled.
-    if (!this.interpolated || !this.hasSnapshot) {
+    // from its constructor position), whenever interpolation is disabled, or
+    // whenever the server moved this zombie by a teleport-sized jump (a body
+    // swap) — see TELEPORT_DISTANCE_SQUARED.
+    if (!this.interpolated || !this.hasSnapshot || teleported) {
       this.x = state.x
       this.y = state.y
     }

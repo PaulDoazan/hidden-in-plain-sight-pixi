@@ -16,4 +16,7 @@ export interface PlayerInternalState extends PlayerState {
 export interface BotInternalState extends BotState {
   canMove: boolean
   countTick: number
+  // Set by the Fuyard bonus: the bot drops out of the walk/idle cycle and
+  // runs straight ahead for the rest of the round.
+  forcedRun: boolean
 }

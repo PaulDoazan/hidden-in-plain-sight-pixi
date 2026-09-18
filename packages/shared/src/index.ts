@@ -85,7 +85,15 @@ export type RoomStatus = 'waiting' | 'drafting' | 'running' | 'ended'
 
 // ─── Bonuses ──────────────────────────────────────────────────────────────
 
-export type BonusId = 'bomb' | 'extra-life' | 'vest' | 'skin-swap' | 'magazine' | 'sprint'
+export type BonusId =
+  | 'bomb'
+  | 'extra-life'
+  | 'vest'
+  | 'skin-swap'
+  | 'magazine'
+  | 'sprint'
+  | 'runaway'
+  | 'horde'
 
 // 'active' bonuses are triggered by the player (B key / mobile button);
 // 'passive' ones fire on their own (at spawn, or when the player is hit).
@@ -149,6 +157,20 @@ export const BONUS_INFO: Record<BonusId, BonusInfo> = {
     icon: '👟',
     kind: 'passive',
   },
+  runaway: {
+    id: 'runaway',
+    name: 'Fuyard',
+    description: 'À déclencher : un faux zombie part en courant et ne s’arrête plus.',
+    icon: '🏃',
+    kind: 'active',
+  },
+  horde: {
+    id: 'horde',
+    name: 'Horde',
+    description: 'À déclencher : dix faux zombies apparaissent autour de toi.',
+    icon: '🧟',
+    kind: 'active',
+  },
 }
 
 // Draw order is the declaration order above; tests rely on it.
@@ -175,6 +197,11 @@ export interface FirePayload {
 export interface LobbyStatePayload {
   players: { id: string; isHost: boolean; username: string }[]
   status: RoomStatus
+  // Host-controlled room setting: the bonuses a round may draw from, in
+  // BONUS_IDS order. An offer holds min(BONUS_OFFER_SIZE, length) cards, and
+  // an empty list means the round skips the draft entirely. Broadcast to
+  // everyone, not just the host, so the whole lobby knows what it is playing.
+  enabledBonuses: BonusId[]
 }
 
 export interface GameStartedPayload {
@@ -252,11 +279,29 @@ export interface PickBonusPayload {
   bonusId: BonusId
 }
 
+export interface SetBonusPayload {
+  bonusId: BonusId
+  enabled: boolean
+}
+
 // Always sent to the owner (their HUD needs to know the charge is spent);
 // broadcast to the rest of the room only for a revealed bonus.
 export interface BonusUsedPayload {
   playerId: string
   username: string
+  bonusId: BonusId
+  // Bots the activation killed, so the client can burst an explosion on each
+  // corpse. Only the bomb sets it; bot positions are public anyway.
+  killedIds?: string[]
+}
+
+// Sent to the owner's socket alone, immediately before `game-started`. This
+// exists because a client's own click is not a reliable source of truth for
+// its bonus: `BonusDraft.resolve()` auto-picks for anyone who didn't click in
+// time (or picked after the deadline), so the server's grant can differ from
+// whatever the client optimistically set locally. The client must treat this
+// event as authoritative and overwrite its local guess unconditionally.
+export interface BonusGrantedPayload {
   bonusId: BonusId
 }
 
@@ -295,6 +340,8 @@ export interface ClientToServerEvents {
   fire: (payload: FirePayload) => void
   'pick-bonus': (payload: PickBonusPayload) => void
   'use-bonus': () => void
+  // host only, valid in `waiting` — persists across rounds
+  'set-bonus': (payload: SetBonusPayload) => void
 }
 
 // Server → Client
@@ -312,4 +359,5 @@ export interface ServerToClientEvents {
   'bonus-draft-started': (payload: BonusDraftStartedPayload) => void
   'bonus-draft-progress': (payload: BonusDraftProgressPayload) => void
   'bonus-used': (payload: BonusUsedPayload) => void
+  'bonus-granted': (payload: BonusGrantedPayload) => void
 }

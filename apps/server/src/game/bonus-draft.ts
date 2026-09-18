@@ -1,5 +1,5 @@
 import type { BonusId } from '@hips/shared'
-import { BONUS_IDS, BONUS_OFFER_SIZE } from '@hips/shared'
+import { BONUS_OFFER_SIZE } from '@hips/shared'
 
 // Owns one round's draw: which cards each player was offered and what they
 // picked. Independent of the room so it can be unit-tested on its own, and so
@@ -11,6 +11,9 @@ export class BonusDraft {
   constructor(
     playerIds: string[],
     private readonly rng: () => number,
+    // The bonuses this round may draw from — the host's selection, which can
+    // be smaller than the catalogue and even smaller than one offer.
+    private readonly pool: BonusId[],
   ) {
     for (const id of playerIds) this.offers.set(id, this.drawOffer())
   }
@@ -66,10 +69,10 @@ export class BonusDraft {
   // are independent between players: two players may be shown, and pick, the
   // same bonus.
   private drawOffer(): BonusId[] {
-    const pool = [...BONUS_IDS]
+    const remaining = [...this.pool]
     const offer: BonusId[] = []
-    for (let i = 0; i < BONUS_OFFER_SIZE && pool.length > 0; i++) {
-      offer.push(pool.splice(Math.floor(this.rng() * pool.length), 1)[0]!)
+    for (let i = 0; i < BONUS_OFFER_SIZE && remaining.length > 0; i++) {
+      offer.push(remaining.splice(Math.floor(this.rng() * remaining.length), 1)[0]!)
     }
     return offer
   }

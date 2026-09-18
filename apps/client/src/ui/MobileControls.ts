@@ -24,6 +24,7 @@ export interface MobileControlsOptions {
   onWalkUp: () => void
   onRunDown: () => void
   onRunUp: () => void
+  onBonus: () => void
 }
 
 // Lower-left column of touch controls: Walk (top), Run (bottom). Both are
@@ -36,6 +37,7 @@ export interface MobileControlsOptions {
 export class MobileControls extends Container {
   private readonly walkBtn: HoldButton
   private readonly runBtn: HoldButton
+  private readonly bonusBtn: HoldButton
   private readonly fullscreenBtn: IconButton
   private canvasWidth: number
   private canvasHeight: number
@@ -59,12 +61,22 @@ export class MobileControls extends Container {
       onDown: opts.onRunDown,
       onUp: opts.onRunUp,
     })
+    this.bonusBtn = new HoldButton({
+      icon: drawBonusIcon,
+      fillColor: 0x1f2937,
+      activeFillColor: 0x3b5468,
+      onDown: opts.onBonus,
+      // Tap, not hold: everything happens on the press.
+      onUp: () => {},
+    })
+    // Hidden until the player drafts an active bonus.
+    this.bonusBtn.visible = false
     this.fullscreenBtn = new IconButton({
       fillColor: 0x1f2937,
       activeFillColor: 0x3b5468,
     })
 
-    this.addChild(this.walkBtn, this.runBtn, this.fullscreenBtn)
+    this.addChild(this.walkBtn, this.runBtn, this.bonusBtn, this.fullscreenBtn)
     this.layout()
   }
 
@@ -81,6 +93,10 @@ export class MobileControls extends Container {
     this.runBtn.forceRelease()
   }
 
+  setBonusAvailable(available: boolean): void {
+    this.bonusBtn.visible = available
+  }
+
   private layout(): void {
     const cx = MARGIN_X + BUTTON_SIZE / 2
     // Walk on top, Run below, centered vertically on COLUMN_CENTER_Y_RATIO so
@@ -89,6 +105,10 @@ export class MobileControls extends Container {
     const halfSpan = (BUTTON_SIZE + BUTTON_GAP) / 2
     this.walkBtn.position.set(cx, columnCenterY - halfSpan)
     this.runBtn.position.set(cx, columnCenterY + halfSpan)
+    // Same edge-to-edge gap (BUTTON_GAP) above Walk as Walk has below it to
+    // Run, rather than half of it — otherwise a mis-tap reaching for Walk can
+    // land on Bonus and burn a one-charge bonus irreversibly.
+    this.bonusBtn.position.set(cx, columnCenterY - halfSpan - BUTTON_SIZE - BUTTON_GAP)
     this.fullscreenBtn.position.set(
       this.canvasWidth - MARGIN_X - BUTTON_SIZE / 2,
       MARGIN_Y + BUTTON_SIZE / 2,
@@ -117,6 +137,12 @@ function drawWalkIcon(g: Graphics): void {
 
 function drawRunIcon(g: Graphics): void {
   g.clear().path(new GraphicsPath(RUN_SVG_PATH)).fill({ color: ICON_COLOR })
+}
+
+// A star, drawn on the same 24×24 viewBox as the other pictograms so
+// HoldButton's centering and scaling apply unchanged.
+function drawBonusIcon(g: Graphics): void {
+  g.clear().star(12, 12, 5, 11, 5).fill({ color: ICON_COLOR })
 }
 
 interface BaseButtonStyle {

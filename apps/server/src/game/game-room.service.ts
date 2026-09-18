@@ -1,4 +1,5 @@
 import type {
+  BonusId,
   BotState,
   GameStartedPayload,
   InputPayload,
@@ -11,6 +12,7 @@ import type {
 } from '@hips/shared'
 import {
   ARRIVAL_LINE_X,
+  BONUS_IDS,
   BOT_COUNT,
   RUN_SPEED,
   SERVER_TICK_HZ,
@@ -22,7 +24,15 @@ import {
   WORLD_WIDTH,
 } from '@hips/shared'
 
-import type { BotInternalState } from './room-state'
+import {
+  BONUS_REGISTRY,
+  HORDE_MAX_RADIUS,
+  HORDE_MIN_RADIUS,
+  type BonusContext,
+  type LethalHitOutcome,
+} from './bonuses'
+import { BonusDraft } from './bonus-draft'
+import type { BotInternalState, PlayerInternalState } from './room-state'
 import { findNearestHit } from './collision'
 
 const TYPES: ZombieType[] = ['man', 'woman', 'wild']
@@ -75,19 +85,34 @@ export const SPAWN_Y_MAX = WORLD_HEIGHT + 80
 // fraction (0.2…0.8). Keeps the spread regular while avoiding a rigid grid.
 const SPAWN_Y_JITTER = 0.6
 
+// What `start()` hands back: either a draft to run first, or a round that has
+// already begun because the host turned bonuses off.
+export type StartOutcome =
+  | { kind: 'draft'; offers: { playerId: string; offer: BonusId[] }[] }
+  | { kind: 'started'; started: GameStartedPayload }
+
 // Per-room state. Owned and instantiated by RoomRegistry; not a Nest provider.
 export class GameRoomService {
   private readonly playerOrder: string[] = []
   // Authoritative username per socket. Set at addPlayer time, persists across
   // start/replay cycles. Cleared on removePlayer.
   private readonly usernames = new Map<string, string>()
-  private readonly players = new Map<string, PlayerState>()
+  private readonly players = new Map<string, PlayerInternalState>()
   private readonly inputs = new Map<string, InputPayload>()
   private bots: BotInternalState[] = []
+  // Open draft, or null outside the `drafting` status.
+  private draft: BonusDraft | null = null
   // Per-room cumulative scores. Survives replay() so a series of games in
   // the same room feels like a tournament; cleared when the room empties.
   private readonly scores = new Map<string, { total: number; lastDelta: number }>()
   private status: RoomStatus = 'waiting'
+  // Host-controlled: the bonuses a round may draw from. Starts as the whole
+  // catalogue; an empty set means the round skips the draft entirely and
+  // everyone runs bonus-less. Deliberately NOT reset by replay(), so a lobby
+  // keeps its ruleset for a whole series.
+  private readonly enabledBonuses = new Set<BonusId>(BONUS_IDS)
+  // Ever-increasing, so a Horde's bots can never reuse a live bot's id.
+  private nextBotIndex = 0
   private static readonly TICK_SCALE = 60 / SERVER_TICK_HZ
   // Default placeholder pre-filled on the client. Treated as "no real name
   // chosen" so the server falls back to "Joueur N" rather than letting every
@@ -115,12 +140,14 @@ export class GameRoomService {
     this.inputs.delete(id)
     this.usernames.delete(id)
     this.scores.delete(id)
+    this.draft?.forget(id)
     // Empty room: drop any leftover game state so the next connection starts
     // in a clean `waiting` lobby. Without this, refreshing the host while
     // running/ended leaves the room stuck and the next Démarrer click is
     // silently rejected by `start()` (status guard).
     if (this.playerOrder.length === 0 && this.status !== 'waiting') {
       this.status = 'waiting'
+      this.draft = null
     }
   }
 
@@ -136,7 +163,20 @@ export class GameRoomService {
         username: this.usernames.get(id) ?? '',
       })),
       status: this.status,
+      // Catalogue order, not insertion order: the lobby list must not reshuffle
+      // under the host every time a box is ticked.
+      enabledBonuses: BONUS_IDS.filter((id) => this.enabledBonuses.has(id)),
     }
+  }
+
+  // Only the host, and only while the lobby is open: changing the pool
+  // mid-draft would leave offers on screen drawn from a stale selection.
+  setBonusEnabled(requesterId: string, bonusId: BonusId, enabled: boolean): boolean {
+    if (this.status !== 'waiting') return false
+    if (this.playerOrder[0] !== requesterId) return false
+    if (enabled) this.enabledBonuses.add(bonusId)
+    else this.enabledBonuses.delete(bonusId)
+    return true
   }
 
   usernameFor(id: string): string {
@@ -155,14 +195,165 @@ export class GameRoomService {
     return trimmed
   }
 
-  start(requesterId: string): GameStartedPayload | null {
+  // Opens the draft. Spawning waits for resolveDraft(): two passive bonuses
+  // change a player's starting state, and applying them to a freshly spawned
+  // player is simpler than spawning first and patching afterwards.
+  start(requesterId: string): StartOutcome | null {
     if (this.status !== 'waiting') return null
     if (this.playerOrder.length === 0) return null
     if (this.playerOrder[0] !== requesterId) return null
 
+    // Nothing enabled: no draft phase at all. The round begins on the spot
+    // with everyone bonus-less, which is this game's pre-draft behaviour.
+    const pool = BONUS_IDS.filter((id) => this.enabledBonuses.has(id))
+    if (pool.length === 0) {
+      this.beginRound([...this.playerOrder])
+      return { kind: 'started', started: this.startedPayload() }
+    }
+
+    this.draft = new BonusDraft([...this.playerOrder], this.rng, pool)
+    this.status = 'drafting'
+    return { kind: 'draft', offers: this.draft.entries() }
+  }
+
+  pickBonus(
+    playerId: string,
+    bonusId: BonusId,
+  ): { accepted: boolean; complete: boolean; pickedIds: string[] } {
+    if (this.status !== 'drafting' || !this.draft) {
+      return { accepted: false, complete: false, pickedIds: [] }
+    }
+    const accepted = this.draft.pick(playerId, bonusId)
+    return {
+      accepted,
+      complete: this.draft.isComplete(),
+      pickedIds: this.draft.pickedIds(),
+    }
+  }
+
+  isDrafting(): boolean {
+    return this.status === 'drafting'
+  }
+
+  draftComplete(): boolean {
+    return this.draft?.isComplete() ?? false
+  }
+
+  // Closes the draft: auto-picks for stragglers, spawns the lineup, applies
+  // every drafted bonus, and hands the gateway the usual game-started payload
+  // plus the resolved picks — the gateway needs the latter to tell each owner
+  // what it was granted (see `bonus-granted`), since a socket that joined
+  // mid-draft is not in `picks` and must not be spawned into the round.
+  resolveDraft(): { started: GameStartedPayload; picks: Map<string, BonusId> } | null {
+    if (this.status !== 'drafting' || !this.draft) return null
+    const picks = this.draft.resolve()
+    this.draft = null
+
+    // Spawn only players the draft actually resolved for — not the full
+    // `playerOrder`, which may since have grown with a socket that joined
+    // mid-draft and was never offered a card.
+    this.beginRound(this.playerOrder.filter((id) => picks.has(id)))
+
+    for (const player of this.players.values()) {
+      const bonusId = picks.get(player.id)
+      if (bonusId) this.assignBonus(player, bonusId)
+    }
+
+    return { started: this.startedPayload(), picks }
+  }
+
+  // Wipes the previous round and puts the given players on the field. Shared
+  // by both ways into a round: a resolved draft, and a draft-less start.
+  private beginRound(playerIds: string[]): void {
     this.players.clear()
     this.bots = []
+    this.nextBotIndex = 0
+    this.spawnLineup(playerIds)
+    this.status = 'running'
+  }
 
+  private startedPayload(): GameStartedPayload {
+    return {
+      players: this.snapshotPlayers(),
+      bots: this.snapshotBots(),
+      arrivalLineX: ARRIVAL_LINE_X,
+    }
+  }
+
+  // Grants a bonus and runs its spawn-time effect. A bonus with an activation
+  // or a save gets exactly one charge; a purely passive one gets none.
+  private assignBonus(player: PlayerInternalState, bonusId: BonusId): void {
+    const def = BONUS_REGISTRY[bonusId]
+    player.bonus = bonusId
+    player.bonusCharges = def.onActivate || def.onLethalHit ? 1 : 0
+    def.onRoundStart?.(this.bonusContext(player))
+  }
+
+  private bonusContext(player: PlayerInternalState): BonusContext {
+    return {
+      player,
+      aliveBots: () => this.bots.filter((b) => b.isAlive),
+      rng: this.rng,
+      spawnBotsAround: (count, x, y) => this.spawnBotsAround(count, x, y),
+    }
+  }
+
+  // Drops `count` fresh bots in a ring around (x, y): far enough not to stack
+  // on the caster, close enough to read as the crowd they are hiding in. The
+  // y spread is clamped to the playfield band so none lands off the ground.
+  private spawnBotsAround(count: number, x: number, y: number): void {
+    for (let i = 0; i < count; i++) {
+      const angle = this.rng() * Math.PI * 2
+      const radius =
+        HORDE_MIN_RADIUS + this.rng() * (HORDE_MAX_RADIUS - HORDE_MIN_RADIUS)
+      const bot = this.spawnBot(this.nextBotIndex++, y + Math.sin(angle) * radius)
+      bot.x = Math.min(WORLD_WIDTH, Math.max(0, x + Math.cos(angle) * radius))
+      bot.y = Math.min(SPAWN_Y_MAX, Math.max(SPAWN_Y_MIN, bot.y))
+      this.bots.push(bot)
+    }
+  }
+
+  // Test-only: grants a bonus as if it had been drafted, so effect tests do
+  // not have to steer the random draw. Resets the round-start-derived fields
+  // to their spawn defaults first: assignBonus only *applies* a bonus's
+  // onRoundStart effect, it never undoes a previous one, so calling this
+  // after the room already auto-drafted (say) sprint for the player would
+  // otherwise leave runMultiplier at 1.35 even after forcing a different
+  // bonus.
+  forceBonusForTest(playerId: string, bonusId: BonusId): void {
+    const player = this.players.get(playerId)
+    if (!player) return
+    player.bulletsRemaining = BULLETS_PER_PLAYER
+    player.runMultiplier = 1
+    this.assignBonus(player, bonusId)
+  }
+
+  // Triggers the player's active bonus. Dead players may use it, exactly as
+  // they may still fire — the revenge rule stays uniform.
+  useBonus(
+    playerId: string,
+  ): { bonusId: BonusId; reveal: boolean; killedIds?: string[] } | null {
+    if (this.status !== 'running') return null
+    const player = this.players.get(playerId)
+    if (!player?.bonus || player.bonusCharges <= 0) return null
+    const def = BONUS_REGISTRY[player.bonus]
+    if (!def.onActivate) return null
+    const outcome = def.onActivate(this.bonusContext(player))
+    // A refused activation (nothing to act on) keeps the charge.
+    if (!outcome) return null
+    player.bonusCharges -= 1
+    return {
+      bonusId: player.bonus,
+      reveal: outcome.reveal,
+      ...(outcome.killedIds ? { killedIds: outcome.killedIds } : {}),
+    }
+  }
+
+  // Builds this round's lineup. Called only from resolveDraft(), once the
+  // players map and bots array have been cleared. `playerIds` is the set the
+  // draft actually resolved for — not necessarily all of `playerOrder` (see
+  // resolveDraft's comment on mid-draft joiners).
+  private spawnLineup(playerIds: string[]): void {
     // Build a single shuffled lineup of all entities — every real player
     // (host included) and every bot — so a real player's spawn position is
     // indistinguishable from a bot's.
@@ -170,7 +361,7 @@ export class GameRoomService {
       | { kind: 'player'; id: string; index: number }
       | { kind: 'bot'; index: number }
     const slots: Slot[] = []
-    this.playerOrder.forEach((id, i) => {
+    playerIds.forEach((id, i) => {
       slots.push({ kind: 'player', id, index: i })
     })
     for (let i = 0; i < BOT_COUNT; i++) {
@@ -189,13 +380,6 @@ export class GameRoomService {
         this.bots.push(this.spawnBot(slot.index, y))
       }
     })
-
-    this.status = 'running'
-    return {
-      players: [...this.players.values()],
-      bots: this.snapshotBots(),
-      arrivalLineX: ARRIVAL_LINE_X,
-    }
   }
 
   // Fisher-Yates using the injected RNG so tests stay deterministic when they
@@ -230,7 +414,7 @@ export class GameRoomService {
       const shift = input?.keys.shift ?? false
       if (space && shift) {
         player.animation = 'run'
-        player.x += RUN_SPEED * GameRoomService.TICK_SCALE
+        player.x += RUN_SPEED * GameRoomService.TICK_SCALE * player.runMultiplier
       } else if (space) {
         player.animation = 'walk'
         player.x += WALK_SPEED * GameRoomService.TICK_SCALE
@@ -244,11 +428,16 @@ export class GameRoomService {
     this.tickBots()
   }
 
+  // Drops the server-private fields (bonus, charges, speed) so a snapshot
+  // never leaks a player's drafted bonus to the rest of the room.
+  private snapshotPlayers(): PlayerState[] {
+    return [...this.players.values()].map(
+      ({ bonus: _b, bonusCharges: _c, runMultiplier: _m, ...rest }) => rest,
+    )
+  }
+
   snapshotState(): StatePayload {
-    return {
-      players: [...this.players.values()].map((p) => ({ ...p })),
-      bots: this.snapshotBots(),
-    }
+    return { players: this.snapshotPlayers(), bots: this.snapshotBots() }
   }
 
   // Convenience method: tick + end-of-game check, used by the gateway loop.
@@ -316,6 +505,13 @@ export class GameRoomService {
     shooterId: string
     origin: { x: number; y: number }
     hit: { targetId: string } | null
+    // Set when a bonus swallowed the hit: the target lives, and the gateway
+    // announces the bonus instead of a kill. `reveal` comes straight from the
+    // hook's own outcome — the gateway must not assume "absorbed ⇒ reveal"
+    // (true today only because the vest is the sole absorbing bonus and it
+    // happens to always reveal; a future silent absorb would break that
+    // assumption).
+    absorbedBy?: { playerId: string; bonusId: BonusId; reveal: boolean }
   } | null {
     if (this.status !== 'running') return null
     const shooter = this.players.get(shooterId)
@@ -333,24 +529,50 @@ export class GameRoomService {
     // gameplay tension: the player loses their only shot for nothing.
     const candidates = [...playerCandidates, ...this.bots]
     const hit = findNearestHit(pointer, candidates, scale)
-    if (hit) {
-      hit.isAlive = false
-      hit.animation = 'die'
-      // Player kills earn the shooter +2 and a replacement bullet. Bot kills
-      // earn neither (bots are not in the leaderboard). `this.players` is the
-      // authoritative set of real players; using it as a guard avoids
-      // depending on the id naming convention `bot-N`. Dead shooters are
-      // rewarded too — they can already fire, so the rule stays uniform.
-      if (this.players.has(hit.id)) {
-        this.creditPoints(shooterId, 2)
-        shooter.bulletsRemaining += BULLET_REWARD_PER_PLAYER_KILL
+    if (!hit) return { shooterId, origin: pointer, hit: null }
+
+    const target = this.players.get(hit.id)
+    const outcome = target ? this.applyLethalHit(target) : null
+    if (outcome?.survived) {
+      if (outcome.diedInstead) {
+        // A bot died in the player's place: report it as the victim so the
+        // rest of the pipeline treats this as an ordinary bot kill — no
+        // points, no bullet back, no kill banner.
+        return { shooterId, origin: pointer, hit: { targetId: outcome.diedInstead.id } }
+      }
+      return {
+        shooterId,
+        origin: pointer,
+        hit: { targetId: hit.id },
+        absorbedBy: { playerId: hit.id, bonusId: target!.bonus!, reveal: outcome.reveal },
       }
     }
-    return {
-      shooterId,
-      origin: pointer,
-      hit: hit ? { targetId: hit.id } : null,
+
+    hit.isAlive = false
+    hit.animation = 'die'
+    // Player kills earn the shooter +2 and a replacement bullet. Bot kills
+    // earn neither (bots are not in the leaderboard). `this.players` is the
+    // authoritative set of real players; using it as a guard avoids
+    // depending on the id naming convention `bot-N`. Dead shooters are
+    // rewarded too — they can already fire, so the rule stays uniform.
+    if (this.players.has(hit.id)) {
+      this.creditPoints(shooterId, 2)
+      shooter.bulletsRemaining += BULLET_REWARD_PER_PLAYER_KILL
     }
+    return { shooterId, origin: pointer, hit: { targetId: hit.id } }
+  }
+
+  // Gives a hit player's bonus a chance to save them. Returns null when they
+  // have no such bonus or no charge left.
+  private applyLethalHit(target: PlayerInternalState): LethalHitOutcome | null {
+    if (!target.bonus || target.bonusCharges <= 0) return null
+    const def = BONUS_REGISTRY[target.bonus]
+    if (!def.onLethalHit) return null
+    const outcome = def.onLethalHit(this.bonusContext(target))
+    // A hook that failed to save the player (no bot to swap with) costs
+    // nothing — the charge is still there for next time.
+    if (outcome.survived) target.bonusCharges -= 1
+    return outcome
   }
 
   replay(requesterId: string): boolean {
@@ -358,6 +580,7 @@ export class GameRoomService {
     if (this.playerOrder[0] !== requesterId) return false
     this.status = 'waiting'
     this.players.clear()
+    this.draft = null
     this.inputs.clear()
     this.bots = []
     // Keep cumulative totals across the series, but zero out every player's
@@ -375,6 +598,7 @@ export class GameRoomService {
   }
 
   private spawnBot(i: number, y: number): BotInternalState {
+    this.nextBotIndex = Math.max(this.nextBotIndex, i + 1)
     const cycleRange = BOT_MAX_TICK - BOT_MIN_TICK
     return {
       id: `bot-${i}`,
@@ -385,6 +609,7 @@ export class GameRoomService {
       isAlive: true,
       canMove: false,
       countTick: Math.floor(this.rng() * cycleRange) + BOT_MIN_TICK,
+      forcedRun: false,
     }
   }
 
@@ -413,6 +638,14 @@ export class GameRoomService {
         bot.animation = 'die'
         continue
       }
+      // A runaway never returns to the walk/idle cycle: it runs until the
+      // round ends, crossing the arrival line and leaving the field like any
+      // other bot is allowed to.
+      if (bot.forcedRun) {
+        bot.animation = 'run'
+        bot.x += RUN_SPEED * GameRoomService.TICK_SCALE
+        continue
+      }
       bot.countTick -= 1
       if (bot.countTick <= 0) {
         bot.canMove = !bot.canMove
@@ -434,7 +667,7 @@ export class GameRoomService {
     return this.bots.map(({ canMove: _c, countTick: _t, ...rest }) => rest)
   }
 
-  private spawnPlayer(id: string, index: number, y: number): PlayerState {
+  private spawnPlayer(id: string, index: number, y: number): PlayerInternalState {
     const x = this.spawnX()
     return {
       id,
@@ -449,6 +682,9 @@ export class GameRoomService {
       // first input event there's still a valid crosshair to render.
       pointer: { x, y: y - 60 },
       username: this.usernames.get(id) ?? '',
+      bonus: null,
+      bonusCharges: 0,
+      runMultiplier: 1,
     }
   }
 

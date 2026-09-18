@@ -1,3 +1,4 @@
+import { BONUS_IDS, BONUS_INFO, type BonusId } from '@hips/shared'
 import { Container, Graphics, Text } from 'pixi.js'
 
 import { Button } from './Button'
@@ -15,7 +16,9 @@ export interface WaitingRoomOverlayOptions {
   players: WaitingRoomPlayer[]
   isHost: boolean
   code: string | null
+  enabledBonuses: BonusId[]
   onStart: () => void
+  onToggleBonus: (bonusId: BonusId, enabled: boolean) => void
 }
 
 export class WaitingRoomOverlay extends Container {
@@ -24,7 +27,9 @@ export class WaitingRoomOverlay extends Container {
   private players: WaitingRoomPlayer[]
   private isHost_: boolean
   private readonly code: string | null
+  private enabledBonuses: BonusId[]
   private readonly onStart: () => void
+  private readonly onToggleBonus: (bonusId: BonusId, enabled: boolean) => void
   private copyResetTimer: ReturnType<typeof setTimeout> | null = null
   private copyBtn: IconButton | null = null
   private copyShowingCheck = false
@@ -36,13 +41,26 @@ export class WaitingRoomOverlay extends Container {
     this.players = opts.players
     this.isHost_ = opts.isHost
     this.code = opts.code
+    this.enabledBonuses = opts.enabledBonuses
     this.onStart = opts.onStart
+    this.onToggleBonus = opts.onToggleBonus
     this.rebuild()
   }
 
   setPlayers(players: WaitingRoomPlayer[]): void {
     if (samePlayers(this.players, players)) return
     this.players = players
+    this.rebuild()
+  }
+
+  setEnabledBonuses(enabled: BonusId[]): void {
+    if (
+      enabled.length === this.enabledBonuses.length &&
+      enabled.every((id, i) => id === this.enabledBonuses[i])
+    ) {
+      return
+    }
+    this.enabledBonuses = enabled
     this.rebuild()
   }
 
@@ -139,7 +157,50 @@ export class WaitingRoomOverlay extends Container {
       this.addChild(text)
     })
 
-    const actionsY = listStartY + this.players.length * lineHeight + 40
+    // Bonus selection: the host ticks what this room plays with, everyone
+    // else reads it. Two columns so eight entries stay above the fold.
+    const bonusHeaderY = listStartY + this.players.length * lineHeight + 30
+    const header = new Text({
+      text: 'Bonus de la partie',
+      style: { fill: 0xaaaaaa, fontSize: 14, fontFamily: 'Space Mono, monospace' },
+    })
+    header.anchor.set(0.5)
+    header.position.set(w / 2, bonusHeaderY)
+    this.addChild(header)
+
+    const rowHeight = 22
+    // Wide enough for the longest entry ("[x] 🎭 Changement de peau") at this
+    // font size, or the left column runs into the right one.
+    const columnWidth = 250
+    const firstRowY = bonusHeaderY + 24
+    const rows = Math.ceil(BONUS_IDS.length / 2)
+    BONUS_IDS.forEach((bonusId, i) => {
+      const info = BONUS_INFO[bonusId]
+      const enabled = this.enabledBonuses.includes(bonusId)
+      const entry = new Text({
+        text: `${enabled ? '[x]' : '[ ]'} ${info.icon} ${info.name}`,
+        style: {
+          fill: enabled ? 0xfff700 : 0x777777,
+          fontSize: 14,
+          fontFamily: 'Space Mono, monospace',
+        },
+      })
+      entry.anchor.set(0, 0.5)
+      const column = i < rows ? 0 : 1
+      const row = i % rows
+      entry.position.set(
+        w / 2 - columnWidth + column * (columnWidth + 10),
+        firstRowY + row * rowHeight,
+      )
+      if (this.isHost_) {
+        entry.eventMode = 'static'
+        entry.cursor = 'pointer'
+        entry.on('pointertap', () => this.onToggleBonus(bonusId, !enabled))
+      }
+      this.addChild(entry)
+    })
+
+    const actionsY = firstRowY + rows * rowHeight + 40
     if (this.isHost_) {
       const btn = new Button({ label: 'Démarrer', onClick: this.onStart })
       btn.position.set(w / 2, actionsY)

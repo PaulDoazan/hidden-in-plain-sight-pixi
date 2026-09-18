@@ -1,28 +1,36 @@
 import { Container, type FederatedPointerEvent, Graphics, Sprite, Text } from 'pixi.js'
-import type {
-  GameEndedPayload,
-  GameStartedPayload,
-  InputPayload,
-  LobbyStatePayload,
-  PlayerKilledPayload,
-  PlayerLeftPayload,
-  PlayerState,
-  ShotFiredPayload,
-  StatePayload,
-  ZombieAnimation,
-  ZombieState,
-  ZombieType,
+import {
+  BONUS_INFO,
+  type BonusDraftProgressPayload,
+  type BonusDraftStartedPayload,
+  type BonusGrantedPayload,
+  type BonusId,
+  type BonusUsedPayload,
+  type GameEndedPayload,
+  type GameStartedPayload,
+  type InputPayload,
+  type LobbyStatePayload,
+  type PlayerKilledPayload,
+  type PlayerLeftPayload,
+  type PlayerState,
+  type ShotFiredPayload,
+  type StatePayload,
+  type ZombieAnimation,
+  type ZombieState,
+  type ZombieType,
 } from '@hips/shared'
 
 import type { Game } from '../app/Game'
 import { ARRIVAL_LINE_TOP_Y } from '../config/gameConfig'
 import { ZOMBIE_SPRITES } from '../config/manifest'
 import { BloodSplat } from '../entities/BloodSplat'
+import { BombBlast } from '../entities/BombBlast'
 import { Crosshair } from '../entities/Crosshair'
 import { FireShot } from '../entities/FireShot'
 import { PlayerZombie } from '../entities/PlayerZombie'
 import type { Layout } from '../systems/Layout'
 import { isMobileDevice } from '../systems/Platform'
+import { BonusDraftOverlay } from '../ui/BonusDraftOverlay'
 import { MobileControls } from '../ui/MobileControls'
 import { WaitingRoomOverlay } from '../ui/WaitingRoomOverlay'
 
@@ -33,6 +41,10 @@ import { Scene } from './Scene'
 // double-tap (which fires on mobile).
 const DOUBLE_TAP_MS = 300
 
+// Playfield shake that follows a bomb, in milliseconds and screen pixels.
+const SHAKE_DURATION_MS = 220
+const SHAKE_AMPLITUDE = 8
+
 export class GameScene extends Scene {
   private bgLayer!: Container
   private gameLayer!: Container
@@ -41,11 +53,33 @@ export class GameScene extends Scene {
   private arrivalLine: Graphics | null = null
   private crosshair!: Crosshair
   private waitingOverlay: WaitingRoomOverlay | null = null
+  private draftOverlay: BonusDraftOverlay | null = null
+  private bonusDraftStartedHandler:
+    | ((payload: BonusDraftStartedPayload) => void)
+    | null = null
+  private bonusDraftProgressHandler:
+    | ((payload: BonusDraftProgressPayload) => void)
+    | null = null
+  private bonusGrantedHandler: ((payload: BonusGrantedPayload) => void) | null = null
+  // Last known room selection, mirrored from the lobby snapshot so the
+  // overlay can render the boxes without asking the server again.
+  private enabledBonuses: BonusId[] = []
+  // Last lobby roster, kept so the draft overlay can show who has picked.
+  private lobbyPlayers: { id: string; username: string }[] = []
+  // The bonus this client drafted this round, and whether its charge is gone.
+  // Never comes from a snapshot: the pick is secret, so the client is the one
+  // that remembers its own.
+  private myBonus: BonusId | null = null
+  private bonusSpent = false
+  // Live bomb explosion, and how long the playfield keeps shaking for it.
+  private bombBlast: BombBlast | null = null
+  private shakeMsLeft = 0
   private lobbyHandler: ((payload: LobbyStatePayload) => void) | null = null
   private gameStartedHandler: ((payload: GameStartedPayload) => void) | null = null
   private stateHandler: ((payload: StatePayload) => void) | null = null
   private shotFiredHandler: ((payload: ShotFiredPayload) => void) | null = null
   private playerKilledHandler: ((payload: PlayerKilledPayload) => void) | null = null
+  private bonusUsedHandler: ((payload: BonusUsedPayload) => void) | null = null
   private gameEndedHandler: ((payload: GameEndedPayload) => void) | null = null
   private playerLeftHandler: ((payload: PlayerLeftPayload) => void) | null = null
   private gameStarted = false
@@ -55,6 +89,9 @@ export class GameScene extends Scene {
   private lastSentInput: InputPayload | null = null
   private worldPointer = { x: 0, y: 0 }
   private hud: Text | null = null
+  // Last rendered "Balles : N (mort)" segment, kept so the bonus suffix can
+  // be re-rendered on its own without needing the last PlayerState.
+  private hudBullets = ''
   private isAlive = true
   private roomCode: string | null = null
   private touchSurface: Graphics | null = null
@@ -113,8 +150,13 @@ export class GameScene extends Scene {
     this.stateHandler = (payload) => this.applyState(payload)
     this.shotFiredHandler = (payload) => this.onShotFired(payload)
     this.playerKilledHandler = (payload) => this.onPlayerKilled(payload)
+    this.bonusUsedHandler = (payload) => this.onBonusUsed(payload)
     this.gameEndedHandler = (payload) => this.onGameEnded(payload)
     this.playerLeftHandler = (payload) => this.onPlayerLeft(payload)
+    this.bonusDraftStartedHandler = (payload) => this.startDraft(payload)
+    this.bonusDraftProgressHandler = (payload) =>
+      this.draftOverlay?.setPicked(payload.pickedIds)
+    this.bonusGrantedHandler = (payload) => this.onBonusGranted(payload)
 
     this.game.net.connect()
     this.game.net.on('lobby-state', this.lobbyHandler)
@@ -122,8 +164,12 @@ export class GameScene extends Scene {
     this.game.net.on('state', this.stateHandler)
     this.game.net.on('shot-fired', this.shotFiredHandler)
     this.game.net.on('player-killed', this.playerKilledHandler)
+    this.game.net.on('bonus-used', this.bonusUsedHandler)
     this.game.net.on('game-ended', this.gameEndedHandler)
     this.game.net.on('player-left', this.playerLeftHandler)
+    this.game.net.on('bonus-draft-started', this.bonusDraftStartedHandler)
+    this.game.net.on('bonus-draft-progress', this.bonusDraftProgressHandler)
+    this.game.net.on('bonus-granted', this.bonusGrantedHandler)
 
     if (typed?.initialLobby) this.applyLobby(typed.initialLobby)
   }
@@ -132,11 +178,15 @@ export class GameScene extends Scene {
     this.teardownMobileUI()
     this.waitingOverlay?.destroy({ children: true })
     this.waitingOverlay = null
+    this.draftOverlay?.destroy({ children: true })
+    this.draftOverlay = null
     this.deathBanners = []
     this.deathBannerLayer?.destroy({ children: true })
     this.deathBannerLayer = null
     this.bulletRewardFlash?.destroy()
     this.bulletRewardFlash = null
+    this.bombBlast?.destroy({ children: true })
+    this.bombBlast = null
     if (this.lobbyHandler) {
       this.game.net.off('lobby-state', this.lobbyHandler)
       this.lobbyHandler = null
@@ -157,6 +207,10 @@ export class GameScene extends Scene {
       this.game.net.off('player-killed', this.playerKilledHandler)
       this.playerKilledHandler = null
     }
+    if (this.bonusUsedHandler) {
+      this.game.net.off('bonus-used', this.bonusUsedHandler)
+      this.bonusUsedHandler = null
+    }
     if (this.gameEndedHandler) {
       this.game.net.off('game-ended', this.gameEndedHandler)
       this.gameEndedHandler = null
@@ -165,6 +219,18 @@ export class GameScene extends Scene {
       this.game.net.off('player-left', this.playerLeftHandler)
       this.playerLeftHandler = null
     }
+    if (this.bonusDraftStartedHandler) {
+      this.game.net.off('bonus-draft-started', this.bonusDraftStartedHandler)
+      this.bonusDraftStartedHandler = null
+    }
+    if (this.bonusDraftProgressHandler) {
+      this.game.net.off('bonus-draft-progress', this.bonusDraftProgressHandler)
+      this.bonusDraftProgressHandler = null
+    }
+    if (this.bonusGrantedHandler) {
+      this.game.net.off('bonus-granted', this.bonusGrantedHandler)
+      this.bonusGrantedHandler = null
+    }
   }
 
   update(delta: number): void {
@@ -172,6 +238,10 @@ export class GameScene extends Scene {
     // banner already on screen keeps fading even if the game just ended.
     this.updateDeathBanners()
     this.updateBulletRewardFlash()
+    // Pixi's delta is in frame units (1 ≈ 16.67 ms at 60 fps); the blast is
+    // timed in real milliseconds so it plays the same on any refresh rate.
+    this.updateBombBlast((delta * 1000) / 60)
+    this.draftOverlay?.tick()
     if (!this.gameStarted) return
     this.crosshair.position.set(this.game.input.pointer.x, this.game.input.pointer.y)
     this.worldPointer = this.gameLayer.toLocal({
@@ -186,6 +256,10 @@ export class GameScene extends Scene {
         pointer: { ...this.worldPointer },
         scale: this.game.layout.zombieScale,
       })
+    }
+
+    if (this.game.input.consumeBonus() && this.canUseBonus()) {
+      this.game.net.emit('use-bonus')
     }
 
     for (const z of this.remoteZombies.values()) {
@@ -218,6 +292,7 @@ export class GameScene extends Scene {
     for (const z of this.remoteZombies.values()) z.scale.set(zombieScale)
 
     this.waitingOverlay?.resize(canvasWidth, canvasHeight)
+    this.draftOverlay?.resize(canvasWidth, canvasHeight)
     this.repositionDeathBanners()
 
     if (this.touchSurface) {
@@ -258,6 +333,7 @@ export class GameScene extends Scene {
         this.game.input.setVirtualSpace(false)
         this.game.input.setVirtualShift(false)
       },
+      onBonus: () => this.game.input.triggerBonus(),
     })
     this.addChild(this.mobileControls)
   }
@@ -342,6 +418,78 @@ export class GameScene extends Scene {
     if (payload.killerId && payload.killerId === this.game.net.id) {
       this.showBulletReward()
     }
+  }
+
+  // Only active, unspent bonuses have anything to trigger. The server checks
+  // all of this again — this only avoids a pointless round trip.
+  private canUseBonus(): boolean {
+    if (!this.myBonus || this.bonusSpent) return false
+    return BONUS_INFO[this.myBonus].kind === 'active'
+  }
+
+  // Authoritative: the draft overlay's onPick sets `myBonus` optimistically
+  // from the card the player clicked, but the timeout path
+  // (BonusDraft.resolve()) can auto-pick a *different* card for a straggler —
+  // including a click that lands after the 15 s deadline. This event is the
+  // server's actual grant and always wins, overwriting whatever the local
+  // click set.
+  private onBonusGranted(payload: BonusGrantedPayload): void {
+    this.myBonus = payload.bonusId
+    this.bonusSpent = false
+    this.refreshBonusHud()
+    this.mobileControls?.setBonusAvailable(this.canUseBonus())
+  }
+
+  private onBonusUsed(payload: BonusUsedPayload): void {
+    // The blast is public and comes before anything else: the bomber receives
+    // this event too, and should see their own explosion.
+    if (payload.killedIds?.length) this.playBombBlast(payload.killedIds)
+
+    if (payload.playerId === this.game.net.id) {
+      this.bonusSpent = true
+      this.mobileControls?.setBonusAvailable(false)
+      this.refreshBonusHud()
+      return
+    }
+    // Reaching here means the server chose to reveal it: only revealed
+    // bonuses are broadcast beyond their owner.
+    const info = BONUS_INFO[payload.bonusId]
+    if (!info.usedMessage) return
+    this.addDeathBanner(`${info.icon} ${payload.username} ${info.usedMessage}`)
+  }
+
+  private playBombBlast(killedIds: string[]): void {
+    const { canvasWidth, canvasHeight } = this.game.layout
+    this.bombBlast?.destroy({ children: true })
+    this.bombBlast = new BombBlast(canvasWidth, canvasHeight)
+    this.effectsLayer.addChild(this.bombBlast)
+    this.shakeMsLeft = SHAKE_DURATION_MS
+
+    // One burst per corpse, in world space so it stays pinned to the body as
+    // the view scales. A bot killed off-screen simply has no zombie to sit on.
+    for (const id of killedIds) {
+      const zombie = this.remoteZombies.get(id)
+      if (!zombie) continue
+      const burst = new FireShot(this.game.assets)
+      burst.position.set(zombie.x, zombie.y)
+      burst.scale.set(2)
+      this.gameLayer.addChild(burst)
+    }
+  }
+
+  // Shakes the playfield for a moment after a detonation. The offset is
+  // applied on top of the layout's own position and cleared exactly back to
+  // it, so a resize during the shake cannot leave the field skewed.
+  private updateBombBlast(deltaMs: number): void {
+    if (this.bombBlast && !this.bombBlast.update(deltaMs)) this.bombBlast = null
+    if (this.shakeMsLeft <= 0) return
+    this.shakeMsLeft = Math.max(0, this.shakeMsLeft - deltaMs)
+    const { playArea } = this.game.layout
+    const strength = (this.shakeMsLeft / SHAKE_DURATION_MS) * SHAKE_AMPLITUDE
+    this.gameLayer.position.set(
+      playArea.x + (Math.random() * 2 - 1) * strength,
+      playArea.y + (Math.random() * 2 - 1) * strength,
+    )
   }
 
   private showBulletReward(): void {
@@ -561,7 +709,15 @@ export class GameScene extends Scene {
   }
 
   private reconcileZombie(state: ZombieState): void {
-    const existing = this.remoteZombies.get(state.id)
+    let existing = this.remoteZombies.get(state.id)
+    // Both body-swap bonuses change a zombie's appearance mid-round, and the
+    // sprite sheets are bound at construction — so a type change means a
+    // rebuild, not an update.
+    if (existing && existing.type !== state.type) {
+      existing.destroy({ children: true })
+      this.remoteZombies.delete(state.id)
+      existing = undefined
+    }
     if (existing) {
       existing.applyServerState(state)
     } else {
@@ -628,14 +784,27 @@ export class GameScene extends Scene {
       players: [],
       isHost: false,
       code: this.roomCode,
+      enabledBonuses: this.enabledBonuses,
       onStart: () => {
         this.game.net.emit('start')
+      },
+      // The server is authoritative and re-broadcasts the lobby, so a box
+      // only ticks once the room has actually accepted the change.
+      onToggleBonus: (bonusId, enabled) => {
+        this.game.net.emit('set-bonus', { bonusId, enabled })
       },
     })
     this.addChild(this.waitingOverlay)
   }
 
   private applyLobby(payload: LobbyStatePayload): void {
+    this.enabledBonuses = payload.enabledBonuses
+    this.waitingOverlay?.setEnabledBonuses(payload.enabledBonuses)
+    this.lobbyPlayers = payload.players.map((p) => ({
+      id: p.id,
+      username: p.username,
+    }))
+    this.draftOverlay?.setPlayers(this.draftPlayers())
     if (!this.waitingOverlay) return
     const me = this.game.net.id
     const isHost = payload.players.some((p) => p.id === me && p.isHost)
@@ -649,9 +818,45 @@ export class GameScene extends Scene {
     this.waitingOverlay.setHost(isHost)
   }
 
-  private startGame(payload: GameStartedPayload): void {
+  private startDraft(payload: BonusDraftStartedPayload): void {
     this.waitingOverlay?.destroy({ children: true })
     this.waitingOverlay = null
+    this.myBonus = null
+    this.bonusSpent = false
+
+    const { canvasWidth, canvasHeight } = this.game.layout
+    this.draftOverlay = new BonusDraftOverlay({
+      width: canvasWidth,
+      height: canvasHeight,
+      offer: payload.offer,
+      durationMs: payload.durationMs,
+      players: this.draftPlayers(),
+      onPick: (bonusId) => {
+        this.myBonus = bonusId
+        this.game.net.emit('pick-bonus', { bonusId })
+      },
+    })
+    this.addChild(this.draftOverlay)
+  }
+
+  private draftPlayers(): { id: string; username: string; isMe: boolean }[] {
+    const me = this.game.net.id
+    return this.lobbyPlayers.map((p) => ({ ...p, isMe: p.id === me }))
+  }
+
+  private startGame(payload: GameStartedPayload): void {
+    // A socket that joined mid-draft has no PlayerState in this round's
+    // payload — the draft was already built from the pre-join roster, so
+    // resolveDraft() never spawned it. Ignore the event and stay on the
+    // waiting overlay; the next round's game-started will include us once we
+    // get an offer of our own.
+    const me = this.game.net.id
+    if (!payload.players.some((p) => p.id === me)) return
+
+    this.waitingOverlay?.destroy({ children: true })
+    this.waitingOverlay = null
+    this.draftOverlay?.destroy({ children: true })
+    this.draftOverlay = null
 
     this.arrivalLineX = payload.arrivalLineX
 
@@ -659,7 +864,6 @@ export class GameScene extends Scene {
     this.drawArrivalLine()
     this.buildHud()
 
-    const me = this.game.net.id
     for (const state of payload.players) {
       this.reconcileZombie(state)
       if (state.id === me) this.refreshHud(state)
@@ -672,6 +876,11 @@ export class GameScene extends Scene {
     // Replay). Without this, the first update() after gameStarted=true would
     // consume that click and immediately emit('fire').
     this.game.input.consumeFire()
+    // Same reasoning for the bonus flag: a B pressed while the draft overlay
+    // was up would otherwise fire use-bonus on the round's first frame.
+    this.game.input.consumeBonus()
+
+    this.mobileControls?.setBonusAvailable(this.canUseBonus())
 
     this.gameStarted = true
   }
@@ -688,9 +897,20 @@ export class GameScene extends Scene {
 
   private refreshHud(state: PlayerState): void {
     this.isAlive = state.isAlive
-    if (!this.hud) return
     const alive = state.isAlive ? '' : ' (mort)'
-    this.hud.text = `Balles : ${state.bulletsRemaining}${alive}`
+    this.hudBullets = `Balles : ${state.bulletsRemaining}${alive}`
+    this.refreshBonusHud()
+  }
+
+  private refreshBonusHud(): void {
+    if (!this.hud) return
+    if (!this.myBonus) {
+      this.hud.text = this.hudBullets
+      return
+    }
+    const info = BONUS_INFO[this.myBonus]
+    const state = this.bonusSpent ? ' (utilisé)' : info.kind === 'active' ? ' [B]' : ''
+    this.hud.text = `${this.hudBullets}  ·  ${info.icon} ${info.name}${state}`
   }
 
   private spawnCrosshair(): void {

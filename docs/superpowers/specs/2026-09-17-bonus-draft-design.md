@@ -23,11 +23,11 @@ Spawning moves from `start()` to the end of the draft. Two passive bonuses
 (Magazine, Sprint) change a player's starting state, and applying them to a
 freshly spawned player is simpler than spawning first and patching afterwards.
 
-| Method                         | Guard                                                                     | Effect                                                                                                                        |
-| ------------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `start(requesterId)`           | status `waiting`, requester is host, room not empty                       | Draws one 3-card offer per player, status → `drafting`, returns the offers                                                    |
-| `pickBonus(playerId, bonusId)` | status `drafting`, bonus is in that player's offer, player has not picked | Records the pick, returns whether the draft is now complete                                                                   |
-| `resolveDraft()`               | status `drafting`                                                         | Auto-picks for stragglers, spawns players + bots, runs `onRoundStart` hooks, status → `running`, returns `GameStartedPayload` |
+| Method                         | Guard                                                                     | Effect                                                                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `start(requesterId)`           | status `waiting`, requester is host, room not empty                       | Draws one 3-card offer per player, status → `drafting`, returns the offers                                                                                               |
+| `pickBonus(playerId, bonusId)` | status `drafting`, bonus is in that player's offer, player has not picked | Records the pick, returns whether the draft is now complete                                                                                                              |
+| `resolveDraft()`               | status `drafting`                                                         | Auto-picks for stragglers, spawns the drafted players + bots, runs `onRoundStart` hooks, status → `running`, returns the `GameStartedPayload` **and** the resolved picks |
 
 The 15 s timer lives in the gateway next to `tickHandles`, as a
 `draftHandles: Map<code, Timeout>` with the same lifecycle (cleared on
@@ -114,6 +114,10 @@ export interface BonusUsedPayload {
   username: string
   bonusId: BonusId
 }
+
+export interface BonusGrantedPayload {
+  bonusId: BonusId
+}
 ```
 
 Event map additions:
@@ -123,6 +127,7 @@ Event map additions:
 | S→C       | `bonus-draft-started`  | per socket     | `BonusDraftStartedPayload`  |
 | S→C       | `bonus-draft-progress` | room broadcast | `BonusDraftProgressPayload` |
 | S→C       | `bonus-used`           | room broadcast | `BonusUsedPayload`          |
+| S→C       | `bonus-granted`        | per socket     | `BonusGrantedPayload`       |
 | C→S       | `pick-bonus`           | —              | `PickBonusPayload`          |
 | C→S       | `use-bonus`            | —              | none                        |
 
@@ -131,9 +136,17 @@ its own three cards.
 
 `PlayerState` is deliberately left untouched. Carrying the chosen bonus there
 would leak it to every client in each 30 Hz snapshot, which contradicts the
-private-pick rule. A client knows its own bonus because it picked it, and
-learns the charge is spent from the matching `bonus-used`. The server stays
-authoritative either way.
+private-pick rule. A client cannot rely on "I know my own bonus because I
+clicked it": `BonusDraft.resolve()` auto-picks for anyone who did not click in
+time, and a click that lands after the deadline is silently superseded by that
+auto-pick. So the server emits `bonus-granted` to the owning socket alone,
+immediately before `game-started`, and the client treats it as the sole
+authoritative source for `myBonus` — overwriting any local guess from the
+draft overlay's click handler. The client separately learns the charge is
+spent from the matching `bonus-used`. The server stays authoritative either
+way, and `bonus-granted` goes to its owner's socket alone, never to the rest
+of the room — the secrecy invariant holds exactly as it does for the offer
+itself.
 
 `use-bonus` carries no payload: the server already knows which bonus the
 socket drafted and whether a charge remains.
@@ -252,8 +265,8 @@ export class BonusDraft {
 - `pick-bonus` → `room.pickBonus()`, broadcast `bonus-draft-progress`; when
   the draft is complete, clear the timer and resolve.
 - Draft resolution (shared by the "all picked" and timeout paths):
-  `room.resolveDraft()` → emit `game-started`, `broadcastLobby`,
-  `startTickLoop`.
+  `room.resolveDraft()` → emit `bonus-granted` to each drafted player's own
+  socket, then `game-started`, `broadcastLobby`, `startTickLoop`.
 - `use-bonus` → `room.useBonus()`; broadcast `bonus-used` when `reveal` is
   true. The bomb's dead bots need no dedicated event: their `isAlive` flip
   travels in the next state snapshot and the client animates it.

@@ -1,19 +1,42 @@
 import {
   ARRIVAL_LINE_X,
+  BONUS_IDS,
   BOT_COUNT,
   SERVER_TICK_HZ,
   SPAWN_BAND_WIDTH,
   SPAWN_BAND_X,
   WALK_SPEED,
   RUN_SPEED,
+  type BonusId,
 } from '@hips/shared'
 
+import { SPRINT_RUN_MULTIPLIER } from './bonuses'
 import {
   BULLETS_PER_PLAYER,
   GameRoomService,
   SPAWN_Y_MAX,
   SPAWN_Y_MIN,
 } from './game-room.service'
+
+// start() either opens a draft or begins the round outright when the host has
+// turned bonuses off. Suites about the draft always mean the former, so they
+// narrow through this rather than asserting the shape on every call.
+function startDraft(
+  room: GameRoomService,
+  hostId: string,
+): { playerId: string; offer: BonusId[] }[] {
+  const result = room.start(hostId)
+  if (result?.kind !== 'draft') throw new Error('expected start() to open a draft')
+  return result.offers
+}
+
+// Rounds now open on a bonus draft. Tests that care about the field, not the
+// draft, go straight through it: nobody picks, so every player gets a random
+// card, and the effect tests override it with forceBonusForTest.
+function startRound(room: GameRoomService, hostId: string): void {
+  room.start(hostId)
+  room.resolveDraft()
+}
 
 describe('GameRoomService — lobby', () => {
   let room: GameRoomService
@@ -27,6 +50,7 @@ describe('GameRoomService — lobby', () => {
     expect(room.snapshotLobby()).toEqual({
       players: [{ id: 'a', isHost: true, username: 'Antoine' }],
       status: 'waiting',
+      enabledBonuses: BONUS_IDS,
     })
   })
 
@@ -53,7 +77,11 @@ describe('GameRoomService — lobby', () => {
   it('reports the room as empty after everyone leaves', () => {
     room.addPlayer('a', 'Antoine')
     room.removePlayer('a')
-    expect(room.snapshotLobby()).toEqual({ players: [], status: 'waiting' })
+    expect(room.snapshotLobby()).toEqual({
+      players: [],
+      status: 'waiting',
+      enabledBonuses: BONUS_IDS,
+    })
   })
 })
 
@@ -92,7 +120,7 @@ describe('GameRoomService — usernames', () => {
 
   it('keeps the same username across replay (only snapshot players cleared)', () => {
     room.addPlayer('a', 'Antoine')
-    room.start('a')
+    startRound(room, 'a')
     room.teleportForTest('a', 9999)
     room.tickAndCheckWinner()
     room.replay('a')
@@ -102,8 +130,9 @@ describe('GameRoomService — usernames', () => {
 
   it('copies the username onto the spawned PlayerState', () => {
     room.addPlayer('a', 'Antoine')
-    const result = room.start('a')!
-    expect(result.players[0]!.username).toBe('Antoine')
+    room.start('a')
+    const result = room.resolveDraft()!
+    expect(result.started.players[0]!.username).toBe('Antoine')
   })
 
   it('allows two players to pick the same username in a room', () => {
@@ -121,6 +150,10 @@ describe('GameRoomService — start', () => {
 
   beforeEach(() => {
     room = new GameRoomService()
+    // Neutral seed: the auto-picked draft bonus must never be one with a
+    // round-start effect (magazine, sprint), or these spawn assertions would
+    // be flaky. rng()=0 always draws/resolves to 'bomb', which has none.
+    room.setRngForTest(() => 0)
   })
 
   it('refuses start while there are no players', () => {
@@ -137,10 +170,11 @@ describe('GameRoomService — start', () => {
   it('spawns each connected player at the start band when host starts', () => {
     room.addPlayer('a')
     room.addPlayer('b')
-    const result = room.start('a')
+    room.start('a')
+    const result = room.resolveDraft()
     expect(result).not.toBeNull()
-    expect(result!.players).toHaveLength(2)
-    for (const p of result!.players) {
+    expect(result!.started.players).toHaveLength(2)
+    for (const p of result!.started.players) {
       expect(p.x).toBeGreaterThanOrEqual(SPAWN_BAND_X)
       expect(p.x).toBeLessThanOrEqual(SPAWN_BAND_X + SPAWN_BAND_WIDTH)
       expect(p.y).toBeGreaterThanOrEqual(SPAWN_Y_MIN)
@@ -156,12 +190,13 @@ describe('GameRoomService — start', () => {
     room.addPlayer('a')
     room.addPlayer('b')
     room.addPlayer('c')
-    const result = room.start('a')!
-    for (const p of result.players) {
+    room.start('a')
+    const result = room.resolveDraft()!
+    for (const p of result.started.players) {
       expect(p.y).toBeGreaterThanOrEqual(SPAWN_Y_MIN)
       expect(p.y).toBeLessThanOrEqual(SPAWN_Y_MAX)
     }
-    for (const b of result.bots) {
+    for (const b of result.started.bots) {
       expect(b.y).toBeGreaterThanOrEqual(SPAWN_Y_MIN)
       expect(b.y).toBeLessThanOrEqual(SPAWN_Y_MAX)
     }
@@ -170,8 +205,9 @@ describe('GameRoomService — start', () => {
   it('aligns every zombie (players + bots) in the same 20-unit left band', () => {
     room.addPlayer('a')
     room.addPlayer('b')
-    const result = room.start('a')!
-    const xs = [...result.players, ...result.bots].map((p) => p.x)
+    room.start('a')
+    const result = room.resolveDraft()!
+    const xs = [...result.started.players, ...result.started.bots].map((p) => p.x)
     for (const x of xs) {
       expect(x).toBeGreaterThanOrEqual(SPAWN_BAND_X)
       expect(x).toBeLessThanOrEqual(SPAWN_BAND_X + SPAWN_BAND_WIDTH)
@@ -183,16 +219,17 @@ describe('GameRoomService — start', () => {
     room.addPlayer('b')
     room.addPlayer('c')
     room.addPlayer('d')
-    const result = room.start('a')!
+    room.start('a')
+    const result = room.resolveDraft()!
     const valid: ReadonlySet<string> = new Set(['man', 'woman', 'wild'])
-    for (const p of [...result.players, ...result.bots]) {
+    for (const p of [...result.started.players, ...result.started.bots]) {
       expect(valid.has(p.type)).toBe(true)
     }
   })
 
   it('refuses a second start call once the room is running', () => {
     room.addPlayer('a')
-    room.start('a')
+    startRound(room, 'a')
     expect(room.start('a')).toBeNull()
     expect(room.snapshotLobby().status).toBe('running')
   })
@@ -203,8 +240,11 @@ describe('GameRoomService — movement', () => {
 
   beforeEach(() => {
     room = new GameRoomService()
+    // Neutral seed so the auto-picked draft bonus never happens to be sprint,
+    // which would make the exact-speed assertions below flaky.
+    room.setRngForTest(() => 0)
     room.addPlayer('a')
-    room.start('a')
+    startRound(room, 'a')
   })
 
   it('does not move a player whose space is not held', () => {
@@ -258,9 +298,12 @@ describe('GameRoomService — fire', () => {
 
   beforeEach(() => {
     room = new GameRoomService()
+    // Neutral seed so the auto-picked draft bonus never happens to be
+    // magazine, which would make the exact bulletsRemaining assertions flaky.
+    room.setRngForTest(() => 0)
     room.addPlayer('a')
     room.addPlayer('b')
-    room.start('a')
+    startRound(room, 'a')
   })
 
   it('returns a miss when the pointer hits no one', () => {
@@ -351,10 +394,13 @@ describe('GameRoomService — fire', () => {
     // Fresh room: players only get a PlayerState at start() time, so the
     // third player has to join before the game starts.
     const room = new GameRoomService()
+    // Neutral seed so the auto-picked draft bonus (e.g. vest, extra-life)
+    // cannot absorb one of the kills below and break the chain.
+    room.setRngForTest(() => 0)
     room.addPlayer('a')
     room.addPlayer('b')
     room.addPlayer('c')
-    room.start('a')
+    startRound(room, 'a')
     room.setBulletsForTest('a', 1)
     room.teleportForTest('b', 1500)
     const b = room.snapshotState().players.find((p) => p.id === 'b')!
@@ -374,7 +420,7 @@ describe('GameRoomService — win condition', () => {
     room = new GameRoomService()
     room.addPlayer('a')
     room.addPlayer('b')
-    room.start('a')
+    startRound(room, 'a')
   })
 
   it('returns null from tickAndCheckWinner while no one has crossed', () => {
@@ -427,7 +473,7 @@ describe('GameRoomService — disconnect during running', () => {
     const room = new GameRoomService()
     room.addPlayer('a')
     room.addPlayer('b')
-    room.start('a')
+    startRound(room, 'a')
     room.removePlayer('b')
     const ids = room.snapshotState().players.map((p) => p.id)
     expect(ids).toEqual(['a'])
@@ -436,7 +482,7 @@ describe('GameRoomService — disconnect during running', () => {
   it('resets the room to waiting when the last player leaves', () => {
     const room = new GameRoomService()
     room.addPlayer('a')
-    room.start('a')
+    startRound(room, 'a')
     expect(room.snapshotLobby().status).toBe('running')
     room.removePlayer('a')
     expect(room.snapshotLobby().status).toBe('waiting')
@@ -446,7 +492,7 @@ describe('GameRoomService — disconnect during running', () => {
   it('resets the room to waiting after an ended game when everyone leaves', () => {
     const room = new GameRoomService()
     room.addPlayer('a')
-    room.start('a')
+    startRound(room, 'a')
     room.teleportForTest('a', 9999)
     room.tickAndCheckWinner()
     expect(room.snapshotLobby().status).toBe('ended')
@@ -456,9 +502,12 @@ describe('GameRoomService — disconnect during running', () => {
 
   it('drops the disconnected player from the leaderboard', () => {
     const room = new GameRoomService()
+    // Neutral seed so the auto-picked draft bonus cannot absorb the kill
+    // below and leave 'b' at 0 points.
+    room.setRngForTest(() => 0)
     room.addPlayer('a', 'Antoine')
     room.addPlayer('b', 'Bruno')
-    room.start('a')
+    startRound(room, 'a')
     // Teleport 'a' far past the bot spawn band (x=1500) so no bot can
     // intercept the shot — bots spawn around SPAWN_BAND_X (x≈180..200) with a
     // wide AABB, so a target must sit well to the right of them.
@@ -478,7 +527,7 @@ describe('GameRoomService — replay', () => {
     room = new GameRoomService()
     room.addPlayer('a')
     room.addPlayer('b')
-    room.start('a')
+    startRound(room, 'a')
     room.teleportForTest('a', 9999)
     room.tickAndCheckWinner()
   })
@@ -521,9 +570,10 @@ describe('GameRoomService — bots', () => {
   })
 
   it('spawns BOT_COUNT bots on start, each alive and idle', () => {
-    const result = room.start('a')!
-    expect(result.bots).toHaveLength(BOT_COUNT)
-    for (const b of result.bots) {
+    room.start('a')
+    const result = room.resolveDraft()!
+    expect(result.started.bots).toHaveLength(BOT_COUNT)
+    for (const b of result.started.bots) {
       expect(b.isAlive).toBe(true)
       expect(b.animation).toBe('idle')
       expect(b.id).toMatch(/^bot-\d+$/)
@@ -531,7 +581,7 @@ describe('GameRoomService — bots', () => {
   })
 
   it('includes bots in state snapshots', () => {
-    room.start('a')
+    startRound(room, 'a')
     const snap = room.snapshotState()
     expect(snap.bots).toHaveLength(BOT_COUNT)
   })
@@ -542,7 +592,7 @@ describe('GameRoomService — bots', () => {
     // so rng()=0 → countTick = min (20). To get countTick=1 we need a
     // different seed strategy — instead we tick enough times to observe
     // movement after the natural flip.
-    room.start('a')
+    startRound(room, 'a')
     const initialBots = [...room.botsForTest()].map((b) => ({ ...b }))
     // Tick a large number of times — well past the max bot cycle of 100 ticks
     // so every bot has had a chance to flip into walking at least once.
@@ -555,7 +605,7 @@ describe('GameRoomService — bots', () => {
   })
 
   it('lets bots walk past the arrival line and off-screen', () => {
-    room.start('a')
+    startRound(room, 'a')
     // Tick long enough that any bot that has spent any meaningful share of
     // ticks in canMove=true will have crossed the line.
     for (let i = 0; i < 5000; i++) room.tick()
@@ -564,7 +614,10 @@ describe('GameRoomService — bots', () => {
   })
 
   it('shooting a bot consumes the bullet and marks the bot dead', () => {
-    room.start('a')
+    // Neutral seed: the auto-picked draft bonus must not be magazine, or the
+    // exact bulletsRemaining assertion below would be flaky.
+    room.setRngForTest(() => 0)
+    startRound(room, 'a')
     // Bots overlap in the start column, so we don't assert *which* bot dies —
     // only that a bot is hit, the hit bot is dead, and the bullet is consumed.
     const target = room.botsForTest()[0]!
@@ -580,14 +633,14 @@ describe('GameRoomService — bots', () => {
   })
 
   it('a bot crossing the arrival line never triggers a winner', () => {
-    room.start('a')
+    startRound(room, 'a')
     // Even if a bot were teleported past the line, only players count.
     // We rely on tickAndCheckWinner only inspecting `players`.
     expect(room.tickAndCheckWinner()).toBeNull()
   })
 
   it('clears bots on replay', () => {
-    room.start('a')
+    startRound(room, 'a')
     room.teleportForTest('a', 9999)
     room.tickAndCheckWinner()
     expect(room.replay('a')).toBe(true)
@@ -596,9 +649,12 @@ describe('GameRoomService — bots', () => {
 
   it('credits +2 to the shooter when they kill another player', () => {
     const room = new GameRoomService()
+    // Neutral seed so the auto-picked draft bonus cannot absorb the kill
+    // below and zero out the shooter's credit.
+    room.setRngForTest(() => 0)
     room.addPlayer('a', 'Antoine')
     room.addPlayer('b', 'Bruno')
-    room.start('a')
+    startRound(room, 'a')
     // Teleport Bruno well past the spawn band so no bot can intercept the
     // shot — bots spawn at x≈180..200 with a wide AABB. x=1500 is well outside
     // any bot AABB.
@@ -617,7 +673,7 @@ describe('GameRoomService — bots', () => {
   it('credits 0 points when the shooter kills a bot', () => {
     const room = new GameRoomService()
     room.addPlayer('a', 'Antoine')
-    room.start('a')
+    startRound(room, 'a')
     const target = room.botsForTest()[0]!
     room.fire('a', { x: target.x, y: target.y - 10 })
     const shooter = room.snapshotLeaderboard().find((e) => e.id === 'a')!
@@ -636,7 +692,7 @@ describe('GameRoomService — bot movement (deterministic)', () => {
     //    another BOT_MIN_TICK, …
     room.setRngForTest(() => 0)
     room.addPlayer('a')
-    room.start('a')
+    startRound(room, 'a')
     const before = room.botsForTest()[0]!.x
     // After exactly BOT_MIN_TICK ticks the countTick reaches 0 → the bot
     // flips into canMove=true and the same tick advances x by one walk step.
@@ -653,7 +709,7 @@ describe('GameRoomService — leaderboard snapshot', () => {
     const room = new GameRoomService()
     room.addPlayer('a', 'Antoine')
     room.addPlayer('b', 'Bruno')
-    room.start('a')
+    startRound(room, 'a')
     const entries = room.snapshotLeaderboard()
     const ids = entries.map((e) => e.id).sort()
     expect(ids).toEqual(['a', 'b'])
@@ -662,11 +718,14 @@ describe('GameRoomService — leaderboard snapshot', () => {
 
   it('sorts by total desc, then lastDelta desc, then username asc', () => {
     const room = new GameRoomService()
+    // Neutral seed so the auto-picked draft bonus cannot absorb one of the
+    // kills below and throw off the expected point totals.
+    room.setRngForTest(() => 0)
     room.addPlayer('a', 'Aaron')
     room.addPlayer('b', 'Bruno')
     room.addPlayer('c', 'Cécile')
     room.addPlayer('d', 'Zoe')
-    room.start('a')
+    startRound(room, 'a')
     room.setBulletsForTest('a', 10)
     room.setBulletsForTest('b', 10)
     // 'b' kills 'a' → b: total 2. Teleport each victim to x=1500 (well past
@@ -698,18 +757,432 @@ describe('GameRoomService — leaderboard snapshot', () => {
     const room = new GameRoomService()
     room.addPlayer('a', 'Ana')
     room.addPlayer('b', 'Bob')
-    room.start('a')
+    startRound(room, 'a')
     // Round 1: 'a' arrives → a.total=7, a.delta=7
     room.teleportForTest('a', ARRIVAL_LINE_X + 1)
     room.tickAndCheckWinner()
     // Replay zeroes a.delta but keeps a.total=7.
     room.replay('a')
-    room.start('a')
+    startRound(room, 'a')
     // Round 2: 'b' arrives → b.total=7, b.delta=7. 'a' didn't score this round
     // so a.delta=0. Both players tie on total=7 — lastDelta breaks the tie.
     room.teleportForTest('b', ARRIVAL_LINE_X + 1)
     room.tickAndCheckWinner()
     const board = room.snapshotLeaderboard()
     expect(board.map((e) => e.id)).toEqual(['b', 'a'])
+  })
+})
+
+describe('GameRoomService — draft lifecycle', () => {
+  let room: GameRoomService
+
+  beforeEach(() => {
+    room = new GameRoomService()
+    // Neutral seed: auto-resolved picks land on 'bomb' (no round-start
+    // effect), so forceBonusForTest is the only source of bonus effects
+    // below and the passive-bonus assertions stay deterministic.
+    room.setRngForTest(() => 0)
+    room.addPlayer('a', 'Antoine')
+    room.addPlayer('b', 'Bruno')
+  })
+
+  it('enters drafting and offers cards to every player instead of spawning', () => {
+    const offers = startDraft(room, 'a')
+    expect(room.snapshotLobby().status).toBe('drafting')
+    expect(offers.map((o) => o.playerId).sort()).toEqual(['a', 'b'])
+    expect(offers[0]!.offer).toHaveLength(3)
+    // Nothing exists on the field yet.
+    expect(room.snapshotState().players).toEqual([])
+    expect(room.snapshotState().bots).toEqual([])
+  })
+
+  it('refuses to fire while the draft is open', () => {
+    room.start('a')
+    expect(room.fire('a', { x: 0, y: 0 })).toBeNull()
+  })
+
+  it('rejects a bonus the player was not offered', () => {
+    const offers = startDraft(room, 'a')
+    const offer = offers.find((o) => o.playerId === 'a')!.offer
+    const notOffered = BONUS_IDS.find((id) => !offer.includes(id))!
+    expect(room.pickBonus('a', notOffered).accepted).toBe(false)
+  })
+
+  it('reports completion once every player has picked', () => {
+    const offers = startDraft(room, 'a')
+    const offerOf = (id: string) => offers.find((o) => o.playerId === id)!.offer
+    expect(room.pickBonus('a', offerOf('a')[0]!)).toEqual({
+      accepted: true,
+      complete: false,
+      pickedIds: ['a'],
+    })
+    const second = room.pickBonus('b', offerOf('b')[0]!)
+    expect(second.complete).toBe(true)
+    expect(second.pickedIds.sort()).toEqual(['a', 'b'])
+  })
+
+  it('spawns everyone and starts running when the draft resolves', () => {
+    room.start('a')
+    const result = room.resolveDraft()!
+    expect(room.snapshotLobby().status).toBe('running')
+    expect(result.started.players).toHaveLength(2)
+    expect(result.started.bots).toHaveLength(BOT_COUNT)
+    // The private bonus fields never leave the server.
+    expect(result.started.players[0]).not.toHaveProperty('bonus')
+    expect(room.snapshotState().players[0]).not.toHaveProperty('bonusCharges')
+  })
+
+  it('applies a passive bonus at spawn', () => {
+    room.start('a')
+    room.resolveDraft()
+    room.forceBonusForTest('a', 'magazine')
+    expect(room.snapshotState().players.find((p) => p.id === 'a')!.bulletsRemaining).toBe(
+      BULLETS_PER_PLAYER + 1,
+    )
+  })
+
+  it('makes a sprinting player cover more ground per tick', () => {
+    room.start('a')
+    room.resolveDraft()
+    room.forceBonusForTest('a', 'sprint')
+    const before = room.snapshotState().players.find((p) => p.id === 'a')!.x
+    room.applyInput('a', {
+      keys: { space: true, shift: true },
+      pointer: { x: 0, y: 0 },
+    })
+    room.tick()
+    const after = room.snapshotState().players.find((p) => p.id === 'a')!.x
+    const tickScale = 60 / SERVER_TICK_HZ
+    expect(after - before).toBeCloseTo(RUN_SPEED * tickScale * SPRINT_RUN_MULTIPLIER)
+  })
+
+  it('drops the draft when a player leaves and lets the rest finish', () => {
+    const offers = startDraft(room, 'a')
+    const offerOf = (id: string) => offers.find((o) => o.playerId === id)!.offer
+    room.pickBonus('a', offerOf('a')[0]!)
+    expect(room.draftComplete()).toBe(false)
+    room.removePlayer('b')
+    expect(room.draftComplete()).toBe(true)
+  })
+
+  it('redraws a draft on the next round', () => {
+    room.start('a')
+    room.resolveDraft()
+    room.teleportForTest('a', ARRIVAL_LINE_X)
+    room.tickAndCheckWinner()
+    expect(room.replay('a')).toBe(true)
+    expect(room.snapshotLobby().status).toBe('waiting')
+    expect(startDraft(room, 'a')).toHaveLength(2)
+  })
+
+  it('does not spawn a socket that joined after the draft opened', () => {
+    room.start('a')
+    // 'c' joins the room while 'a' and 'b' are still drafting. The draft was
+    // built from the pre-join roster, so 'c' gets no offer and never appears
+    // in the resolved picks — resolveDraft must not spawn them anyway just
+    // because they are now in playerOrder.
+    room.addPlayer('c', 'Chloé')
+    const result = room.resolveDraft()!
+    const ids = result.started.players.map((p) => p.id)
+    expect(ids.sort()).toEqual(['a', 'b'])
+    expect(result.picks.has('c')).toBe(false)
+  })
+})
+
+describe('GameRoomService — bonus effects in game', () => {
+  let room: GameRoomService
+
+  beforeEach(() => {
+    room = new GameRoomService()
+    room.addPlayer('a', 'Antoine')
+    room.addPlayer('b', 'Bruno')
+    startRound(room, 'a')
+  })
+
+  const aliveBots = () => room.botsForTest().filter((b) => b.isAlive)
+
+  it('the bomb kills a fifth of the bots and no player', () => {
+    room.forceBonusForTest('a', 'bomb')
+    const before = aliveBots().length
+    expect(room.useBonus('a')).toMatchObject({ bonusId: 'bomb', reveal: true })
+    expect(aliveBots()).toHaveLength(before - Math.ceil(before * 0.2))
+    expect(room.snapshotState().players.every((p) => p.isAlive)).toBe(true)
+  })
+
+  it('spends the bomb charge, so a second press does nothing', () => {
+    room.forceBonusForTest('a', 'bomb')
+    room.useBonus('a')
+    expect(room.useBonus('a')).toBeNull()
+  })
+
+  it('keeps the bomb charge when there is no bot left to kill', () => {
+    room.forceBonusForTest('a', 'bomb')
+    for (const bot of room.botsForTest()) bot.isAlive = false
+    expect(room.useBonus('a')).toBeNull()
+    // The refusal above must not have spent the charge: revive a bot and
+    // confirm the bomb can still be used. If the first, refused call had
+    // incorrectly decremented bonusCharges, this would also return null.
+    room.botsForTest()[0]!.isAlive = true
+    expect(room.useBonus('a')).toMatchObject({ bonusId: 'bomb', reveal: true })
+  })
+
+  it('refuses to activate a passive bonus', () => {
+    room.forceBonusForTest('a', 'vest')
+    expect(room.useBonus('a')).toBeNull()
+  })
+
+  it('reports the skin swap without revealing it', () => {
+    room.forceBonusForTest('a', 'skin-swap')
+    expect(room.useBonus('a')).toEqual({ bonusId: 'skin-swap', reveal: false })
+  })
+
+  it('the vest absorbs the first hit and is reported to the gateway', () => {
+    room.forceBonusForTest('b', 'vest')
+    room.setBulletsForTest('a', 1)
+    room.teleportForTest('b', 1500)
+    const b = room.snapshotState().players.find((p) => p.id === 'b')!
+    const result = room.fire('a', { x: b.x, y: b.y - 10 })!
+    expect(result.absorbedBy).toEqual({ playerId: 'b', bonusId: 'vest', reveal: true })
+    expect(room.snapshotState().players.find((p) => p.id === 'b')!.isAlive).toBe(true)
+    // An absorbed hit pays nothing: no point, no bullet back.
+    expect(room.snapshotState().players.find((p) => p.id === 'a')!.bulletsRemaining).toBe(0)
+    expect(room.snapshotLeaderboard().find((e) => e.id === 'a')!.total).toBe(0)
+  })
+
+  it('the vest only saves once', () => {
+    room.forceBonusForTest('b', 'vest')
+    room.teleportForTest('b', 1500)
+    const b = room.snapshotState().players.find((p) => p.id === 'b')!
+    room.setBulletsForTest('a', 1)
+    room.fire('a', { x: b.x, y: b.y - 10 })
+    room.setBulletsForTest('a', 1)
+    const second = room.fire('a', { x: b.x, y: b.y - 10 })!
+    expect(second.absorbedBy).toBeUndefined()
+    expect(second.hit).toEqual({ targetId: 'b' })
+    expect(room.snapshotState().players.find((p) => p.id === 'b')!.isAlive).toBe(false)
+  })
+
+  it('the extra life reports the decoy bot as the victim', () => {
+    room.forceBonusForTest('b', 'extra-life')
+    room.setBulletsForTest('a', 1)
+    room.teleportForTest('b', 1500)
+    const b = room.snapshotState().players.find((p) => p.id === 'b')!
+    const result = room.fire('a', { x: b.x, y: b.y - 10 })!
+    expect(result.absorbedBy).toBeUndefined()
+    expect(result.hit!.targetId).toMatch(/^bot-/)
+    // The shooter killed a bot as far as the pipeline is concerned: no points,
+    // no bullet refunded.
+    expect(room.snapshotState().players.find((p) => p.id === 'a')!.bulletsRemaining).toBe(0)
+    expect(room.snapshotLeaderboard().find((e) => e.id === 'a')!.total).toBe(0)
+    const survivor = room.snapshotState().players.find((p) => p.id === 'b')!
+    expect(survivor.isAlive).toBe(true)
+    expect(survivor.x).not.toBe(b.x)
+  })
+
+  it('the extra life cannot save a player once every bot is dead', () => {
+    room.forceBonusForTest('b', 'extra-life')
+    for (const bot of room.botsForTest()) bot.isAlive = false
+    room.setBulletsForTest('a', 1)
+    room.teleportForTest('b', 1500)
+    const b = room.snapshotState().players.find((p) => p.id === 'b')!
+    const result = room.fire('a', { x: b.x, y: b.y - 10 })!
+    expect(result.hit).toEqual({ targetId: 'b' })
+    expect(room.snapshotState().players.find((p) => p.id === 'b')!.isAlive).toBe(false)
+  })
+})
+
+// Every other bonus test grants its bonus with forceBonusForTest, which
+// bypasses pickBonus/resolveDraft entirely — so nothing exercises the seam
+// the whole feature turns on: a real pick, threaded through the draft,
+// landing as a working charge. Deleting the assignBonus loop in
+// resolveDraft() leaves every test above green (forceBonusForTest doesn't
+// go through it) while silently breaking every drafted bonus in production.
+describe('GameRoomService — a drafted (not forced) bonus takes effect', () => {
+  // Narrowing the host's selection to a single bonus makes the offer
+  // deterministic without steering the rng, which is both clearer and immune
+  // to the catalogue growing.
+  function roomOffering(bonusId: BonusId): GameRoomService {
+    const room = new GameRoomService()
+    room.addPlayer('a', 'Antoine')
+    for (const id of BONUS_IDS) {
+      if (id !== bonusId) room.setBonusEnabled('a', id, false)
+    }
+    return room
+  }
+
+  it('threads an active pick through pickBonus -> resolveDraft into a working charge', () => {
+    const room = roomOffering('bomb')
+    expect(startDraft(room, 'a')[0]!.offer).toEqual(['bomb'])
+    expect(room.pickBonus('a', 'bomb')).toEqual({
+      accepted: true,
+      complete: true,
+      pickedIds: ['a'],
+    })
+    room.resolveDraft()
+    // Only meaningful if resolveDraft's assignBonus loop actually ran: absent
+    // it, player.bonus stays null and useBonus() returns null unconditionally
+    // regardless of what was picked.
+    expect(room.useBonus('a')).toMatchObject({ bonusId: 'bomb', reveal: true })
+  })
+
+  it('threads a passive pick through pickBonus -> resolveDraft into a spawn-time effect', () => {
+    const room = roomOffering('magazine')
+    expect(startDraft(room, 'a')[0]!.offer).toEqual(['magazine'])
+    expect(room.pickBonus('a', 'magazine').complete).toBe(true)
+    room.resolveDraft()
+    // Magazine's onRoundStart only runs from inside resolveDraft's
+    // assignBonus loop — without it bulletsRemaining stays at the default.
+    expect(room.snapshotState().players.find((p) => p.id === 'a')!.bulletsRemaining).toBe(
+      BULLETS_PER_PLAYER + 1,
+    )
+  })
+})
+
+describe('GameRoomService — useBonus guards', () => {
+  let room: GameRoomService
+
+  beforeEach(() => {
+    room = new GameRoomService()
+    room.addPlayer('a', 'Antoine')
+    room.addPlayer('b', 'Bruno')
+    startRound(room, 'a')
+  })
+
+  it('refuses to use a bonus once the round has ended', () => {
+    room.forceBonusForTest('a', 'bomb')
+    room.teleportForTest('a', ARRIVAL_LINE_X + 1)
+    room.tickAndCheckWinner()
+    expect(room.snapshotLobby().status).toBe('ended')
+    expect(room.useBonus('a')).toBeNull()
+  })
+
+  it('lets a dead player still use their bonus (uniform revenge rule)', () => {
+    room.forceBonusForTest('a', 'bomb')
+    room.killForTest('a')
+    expect(room.useBonus('a')).toMatchObject({ bonusId: 'bomb', reveal: true })
+  })
+})
+
+// The host picks which bonuses a round may draw from. The selection lives on
+// the room and survives replay(), so a lobby keeps its ruleset for a series.
+describe('GameRoomService — bonus selection', () => {
+  let room: GameRoomService
+
+  beforeEach(() => {
+    room = new GameRoomService()
+    room.addPlayer('a', 'Antoine')
+    room.addPlayer('b', 'Bruno')
+  })
+
+  it('starts with the whole catalogue enabled', () => {
+    expect(room.snapshotLobby().enabledBonuses).toEqual(BONUS_IDS)
+  })
+
+  it('lets the host drop a bonus, keeping the catalogue order', () => {
+    expect(room.setBonusEnabled('a', 'vest', false)).toBe(true)
+    const enabled = room.snapshotLobby().enabledBonuses
+    expect(enabled).not.toContain('vest')
+    expect(enabled).toEqual(BONUS_IDS.filter((id) => id !== 'vest'))
+  })
+
+  it('lets the host put one back', () => {
+    room.setBonusEnabled('a', 'vest', false)
+    room.setBonusEnabled('a', 'vest', true)
+    expect(room.snapshotLobby().enabledBonuses).toEqual(BONUS_IDS)
+  })
+
+  it('refuses a player who is not the host', () => {
+    expect(room.setBonusEnabled('b', 'vest', false)).toBe(false)
+    expect(room.snapshotLobby().enabledBonuses).toEqual(BONUS_IDS)
+  })
+
+  it('refuses a change once the round has left the lobby', () => {
+    room.start('a')
+    expect(room.setBonusEnabled('a', 'vest', false)).toBe(false)
+  })
+
+  it('only ever offers bonuses the host left enabled', () => {
+    for (const id of BONUS_IDS) {
+      if (id !== 'bomb' && id !== 'horde') room.setBonusEnabled('a', id, false)
+    }
+    for (const { offer } of startDraft(room, 'a')) {
+      expect(offer).toHaveLength(2)
+      for (const bonus of offer) expect(['bomb', 'horde']).toContain(bonus)
+    }
+  })
+
+  it('skips the draft entirely when the host disables everything', () => {
+    for (const id of BONUS_IDS) room.setBonusEnabled('a', id, false)
+    const result = room.start('a')!
+    expect(result.kind).toBe('started')
+    expect(room.snapshotLobby().status).toBe('running')
+    expect(room.useBonus('a')).toBeNull()
+  })
+
+  it('keeps the selection across replay', () => {
+    room.setBonusEnabled('a', 'vest', false)
+    startRound(room, 'a')
+    room.teleportForTest('a', ARRIVAL_LINE_X)
+    room.tickAndCheckWinner()
+    room.replay('a')
+    expect(room.snapshotLobby().enabledBonuses).not.toContain('vest')
+  })
+})
+
+describe('GameRoomService — runaway and horde', () => {
+  let room: GameRoomService
+
+  beforeEach(() => {
+    room = new GameRoomService()
+    room.addPlayer('a', 'Antoine')
+    room.addPlayer('b', 'Bruno')
+    startRound(room, 'a')
+  })
+
+  it('keeps the runaway bot running, tick after tick', () => {
+    room.forceBonusForTest('a', 'runaway')
+    expect(room.useBonus('a')).toEqual({ bonusId: 'runaway', reveal: false })
+    // The bonus picks its decoy at random, so we find it by watching which bot
+    // covers a full run step in one tick.
+    const before = room.botsForTest().map((b) => b.x)
+    room.tick()
+    const afterOne = room.botsForTest().map((b) => b.x)
+    room.tick()
+    const afterTwo = room.botsForTest().map((b) => b.x)
+    const tickScale = 60 / SERVER_TICK_HZ
+    const runnerIdx = afterOne.findIndex(
+      (x, i) => Math.abs(x - before[i]! - RUN_SPEED * tickScale) < 0.001,
+    )
+    expect(runnerIdx).toBeGreaterThanOrEqual(0)
+    // Still running one tick later — it never goes back to the walk/idle cycle.
+    expect(afterTwo[runnerIdx]! - afterOne[runnerIdx]!).toBeCloseTo(RUN_SPEED * tickScale)
+    expect(room.snapshotState().bots[runnerIdx]!.animation).toBe('run')
+  })
+
+  it('drops ten fresh bots around the player', () => {
+    const before = room.botsForTest().length
+    const me = room.snapshotState().players.find((p) => p.id === 'a')!
+    room.forceBonusForTest('a', 'horde')
+    expect(room.useBonus('a')).toEqual({ bonusId: 'horde', reveal: false })
+    const bots = room.botsForTest()
+    expect(bots).toHaveLength(before + 10)
+    // Unique ids, or the client would reconcile two zombies onto one sprite.
+    expect(new Set(bots.map((b) => b.id)).size).toBe(bots.length)
+    const fresh = bots.slice(before)
+    for (const bot of fresh) {
+      expect(bot.isAlive).toBe(true)
+      const distance = Math.hypot(bot.x - me.x, bot.y - me.y)
+      expect(distance).toBeGreaterThan(0)
+      expect(distance).toBeLessThan(260)
+    }
+  })
+
+  it('reports the bots a bomb killed', () => {
+    room.forceBonusForTest('a', 'bomb')
+    const used = room.useBonus('a')!
+    expect(used.killedIds!.length).toBeGreaterThan(0)
+    for (const id of used.killedIds!) {
+      expect(room.botsForTest().find((b) => b.id === id)!.isAlive).toBe(false)
+    }
   })
 })

@@ -7,6 +7,9 @@ export class InputManager {
   private readonly keys = new Set<string>()
   pointer: PointerPosition = { x: 0, y: 0 }
   private firedThisFrame = false
+  // Edge-triggered like firedThisFrame: B (or the mobile bonus button) sets
+  // it, the scene's update loop consumes it exactly once.
+  private bonusThisFrame = false
   // Virtual key state driven by the mobile on-screen controls. Folded into
   // isDown() so the rest of the game can stay agnostic of input source.
   private virtualSpace = false
@@ -43,6 +46,12 @@ export class InputManager {
     return fired
   }
 
+  consumeBonus(): boolean {
+    const used = this.bonusThisFrame
+    this.bonusThisFrame = false
+    return used
+  }
+
   // Mobile controls bridge: the on-screen walk/run buttons toggle these flags
   // so isDown(' ') / isDown('Shift') stay the single source of truth for
   // movement state.
@@ -58,6 +67,10 @@ export class InputManager {
     this.firedThisFrame = true
   }
 
+  triggerBonus(): void {
+    this.bonusThisFrame = true
+  }
+
   // Mobile drag bridge: the touch surface in GameScene reports finger position
   // here so screen-space code (crosshair) keeps reading from a single source.
   setPointer(x: number, y: number): void {
@@ -66,6 +79,7 @@ export class InputManager {
 
   private onKeyDown = (event: KeyboardEvent) => {
     this.keys.add(event.key)
+    if (event.key === 'b' || event.key === 'B') this.bonusThisFrame = true
     if (event.key === ' ') event.preventDefault()
   }
 

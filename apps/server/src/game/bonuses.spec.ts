@@ -1,6 +1,11 @@
 import type { BonusId } from '@hips/shared'
 
-import { BONUS_REGISTRY, BOMB_BOT_KILL_RATIO, type BonusContext } from './bonuses'
+import {
+  BONUS_REGISTRY,
+  BOMB_BOT_KILL_RATIO,
+  HORDE_BOT_COUNT,
+  type BonusContext,
+} from './bonuses'
 import type { BotInternalState, PlayerInternalState } from './room-state'
 
 function makePlayer(over: Partial<PlayerInternalState> = {}): PlayerInternalState {
@@ -32,6 +37,7 @@ function makeBots(count: number): BotInternalState[] {
     isAlive: true,
     canMove: false,
     countTick: 10,
+    forcedRun: false,
   }))
 }
 
@@ -44,6 +50,7 @@ function makeCtx(
     player,
     aliveBots: () => bots.filter((b) => b.isAlive),
     rng,
+    spawnBotsAround: () => {},
   }
 }
 
@@ -65,7 +72,7 @@ describe('bonus registry — bomb', () => {
   it('kills a fifth of the living bots, rounded up', () => {
     const bots = makeBots(20)
     const outcome = BONUS_REGISTRY.bomb.onActivate!(makeCtx(makePlayer(), bots))
-    expect(outcome).toEqual({ reveal: true })
+    expect(outcome!.reveal).toBe(true)
     const dead = bots.filter((b) => !b.isAlive)
     expect(dead).toHaveLength(Math.ceil(20 * BOMB_BOT_KILL_RATIO))
     for (const b of dead) expect(b.animation).toBe('die')
@@ -147,5 +154,48 @@ describe('bonus registry — shape', () => {
       expect(hasHook).toBe(true)
       if (def.kind === 'active') expect(def.onActivate).toBeDefined()
     }
+  })
+})
+
+describe('bonus registry — runaway', () => {
+  it('sends one living bot running for good', () => {
+    const bots = makeBots(3)
+    const outcome = BONUS_REGISTRY.runaway.onActivate!(makeCtx(makePlayer(), bots))
+    expect(outcome).toEqual({ reveal: false })
+    expect(bots.filter((b) => b.forcedRun)).toHaveLength(1)
+    // The decoy must stay alive — a corpse draws no fire.
+    expect(bots.every((b) => b.isAlive)).toBe(true)
+  })
+
+  it('refuses when no bot is alive, so the charge is kept', () => {
+    expect(BONUS_REGISTRY.runaway.onActivate!(makeCtx(makePlayer(), []))).toBeNull()
+  })
+})
+
+describe('bonus registry — horde', () => {
+  it('asks the room for ten bots at the player position', () => {
+    const player = makePlayer({ x: 640, y: 480 })
+    const calls: { count: number; x: number; y: number }[] = []
+    const outcome = BONUS_REGISTRY.horde.onActivate!({
+      player,
+      aliveBots: () => [],
+      rng: () => 0,
+      spawnBotsAround: (count, x, y) => calls.push({ count, x, y }),
+    })
+    expect(outcome).toEqual({ reveal: false })
+    expect(calls).toEqual([{ count: HORDE_BOT_COUNT, x: 640, y: 480 }])
+  })
+
+  it('works with no bot left alive — it creates its own', () => {
+    expect(BONUS_REGISTRY.horde.onActivate!(makeCtx(makePlayer(), []))).not.toBeNull()
+  })
+})
+
+describe('bonus registry — bomb reports its victims', () => {
+  it('names every bot it killed', () => {
+    const bots = makeBots(20)
+    const outcome = BONUS_REGISTRY.bomb.onActivate!(makeCtx(makePlayer(), bots))!
+    const dead = bots.filter((b) => !b.isAlive).map((b) => b.id)
+    expect(outcome.killedIds!.sort()).toEqual(dead.sort())
   })
 })

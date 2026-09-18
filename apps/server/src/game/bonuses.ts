@@ -8,6 +8,12 @@ export const BOMB_BOT_KILL_RATIO = 0.2
 // Sprint only touches running; walking is unchanged.
 export const SPRINT_RUN_MULTIPLIER = 1.35
 export const MAGAZINE_EXTRA_BULLETS = 1
+// Bots the Horde conjures around its caster, and the ring they land in:
+// far enough not to stack on top of the caster, close enough to read as
+// the crowd they are hiding in.
+export const HORDE_BOT_COUNT = 10
+export const HORDE_MIN_RADIUS = 60
+export const HORDE_MAX_RADIUS = 180
 
 // What a hook is allowed to see and touch. Everything it needs is passed in,
 // so bonuses stay pure functions of the room state and take the room's
@@ -16,12 +22,17 @@ export interface BonusContext {
   player: PlayerInternalState
   aliveBots: () => BotInternalState[]
   rng: () => number
+  // Adds fresh bots scattered around a point. The room owns id allocation and
+  // the bot factory, so it provides this rather than letting a hook build one.
+  spawnBotsAround: (count: number, x: number, y: number) => void
 }
 
 export interface ActivateOutcome {
   // Whether the whole room is told. See the reveal rule in the design doc:
   // a bonus is announced only when somebody would otherwise be confused.
   reveal: boolean
+  // Bots the activation killed, for the client to burst an explosion on.
+  killedIds?: string[]
 }
 
 export interface LethalHitOutcome {
@@ -82,7 +93,7 @@ export const BONUS_REGISTRY: Record<BonusId, BonusDefinition> = {
         pool[i]!.isAlive = false
         pool[i]!.animation = 'die'
       }
-      return { reveal: true }
+      return { reveal: true, killedIds: pool.slice(0, count).map((b) => b.id) }
     },
   },
   'extra-life': {
@@ -125,6 +136,27 @@ export const BONUS_REGISTRY: Record<BonusId, BonusDefinition> = {
     kind: BONUS_INFO.sprint.kind,
     onRoundStart: (ctx) => {
       ctx.player.runMultiplier = SPRINT_RUN_MULTIPLIER
+    },
+  },
+  runaway: {
+    id: 'runaway',
+    kind: BONUS_INFO.runaway.kind,
+    onActivate: (ctx) => {
+      const decoy = pickRandom(ctx.aliveBots(), ctx.rng)
+      if (!decoy) return null
+      decoy.forcedRun = true
+      // Silent on purpose: a decoy that announces itself draws nothing.
+      return { reveal: false }
+    },
+  },
+  horde: {
+    id: 'horde',
+    kind: BONUS_INFO.horde.kind,
+    onActivate: (ctx) => {
+      // Never refuses: unlike the others it does not need a living bot, it
+      // makes its own.
+      ctx.spawnBotsAround(HORDE_BOT_COUNT, ctx.player.x, ctx.player.y)
+      return { reveal: false }
     },
   },
 }
