@@ -1,6 +1,6 @@
 # Hidden in Plain Sight — PixiJS rewrite
 
-PixiJS v8 + TypeScript port of the original CreateJS game *« Marche ou crève »*.
+PixiJS v8 + TypeScript port of the original CreateJS game _« Marche ou crève »_.
 
 A solo player controls one zombie hidden among bots. Aim with the mouse, fire your single bullet, run to the finish line on the right to win.
 
@@ -13,11 +13,11 @@ A solo player controls one zombie hidden among bots. Aim with the mouse, fire yo
 
 ## Phasing
 
-| Phase | Status | Scope |
-|-------|--------|-------|
-| 1 | in progress | Solo sandbox client, monorepo bootstrap |
-| 2 | planned | Multiplayer via NestJS WebSocket gateway, room codes |
-| 3 | planned | Mobile / touch version |
+| Phase | Status      | Scope                                                                            |
+| ----- | ----------- | -------------------------------------------------------------------------------- |
+| 1     | in progress | Solo sandbox client, monorepo bootstrap                                          |
+| 2     | in progress | Multiplayer via NestJS WebSocket gateway, room codes, start-of-round bonus draft |
+| 3     | planned     | Mobile / touch version                                                           |
 
 ## Local dev
 
@@ -31,24 +31,57 @@ Then open http://localhost:5173.
 
 ## Controls (Phase 1)
 
-| Action | Input |
-|--------|-------|
-| Aim | Move the mouse |
-| Shoot (one bullet only) | Left-click |
-| Walk forward | Hold `Space` |
-| Run forward | Hold `Shift` + `Space` |
+| Action                  | Input                              |
+| ----------------------- | ---------------------------------- |
+| Aim                     | Move the mouse                     |
+| Shoot (one bullet only) | Left-click                         |
+| Walk forward            | Hold `Space`                       |
+| Run forward             | Hold `Shift` + `Space`             |
+| Trigger your bonus      | `B` (or the star button on mobile) |
 
 Win condition: cross the dashed line on the right of the play area.
 
+## Bonus system
+
+Every round opens on a **draft**: each player is offered three bonuses and
+picks one. The pick is secret — the others only see that you have chosen. A
+player who lets the 15 s timer run out is dealt a random card from their own
+offer, and the server tells them which one they got.
+
+The host decides what the room plays with, from the waiting room: eight
+checkboxes, persisted across rounds. Tick fewer than three and the offer
+shrinks to match; untick everything and the round skips the draft entirely.
+
+| Bonus                 | Kind    | Effect                                                                                                                                              |
+| --------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 💣 Bombe              | active  | Kills a fifth of the living bots, anywhere on the map. Announced to the room, with a full-screen blast.                                             |
+| ❤️ Seconde vie        | passive | The lethal shot swaps you with a random bot, which dies in your place. The shooter sees a body fall where they aimed and is paid as for a bot kill. |
+| 🛡️ Gilet              | passive | Absorbs the first lethal hit where you stand. Announced — which also outs you as human.                                                             |
+| 🎭 Changement de peau | active  | Swaps your position and appearance with a living bot. Both stay alive, nothing is announced.                                                        |
+| 🔫 Chargeur           | passive | Start the round with one extra bullet.                                                                                                              |
+| 👟 Sprint             | passive | Run 35 % faster. Walking is unchanged.                                                                                                              |
+| 🏃 Fuyard             | active  | Sends a random bot running for the rest of the round — a decoy, since running is what hurried humans do.                                            |
+| 🧟 Horde              | active  | Conjures ten bots around you. You give away roughly where you are, then vanish into the crowd you just made.                                        |
+
+A bonus is announced to the room only when somebody would otherwise be
+confused by what they just saw. Everything else stays silent: the whole point
+of hiding among bots is that nobody can tell what you are holding.
+
+The catalogue lives in `packages/shared` (ids, names, French copy) and the
+effects in `apps/server/src/game/bonuses.ts`, a registry of at most three
+hooks per bonus — `onRoundStart`, `onActivate`, `onLethalHit`. `GameRoomService`
+calls those hooks and never names an individual bonus, so adding a ninth is
+one registry entry plus its shared metadata.
+
 ## Layout
 
-| Topic | Path |
-|-------|------|
-| Spec | `docs/superpowers/specs/` |
+| Topic               | Path                                       |
+| ------------------- | ------------------------------------------ |
+| Spec                | `docs/superpowers/specs/`                  |
 | Implementation plan | `docs/superpowers/plans/` (in source repo) |
-| Client | `apps/client` |
-| Server | `apps/server` |
-| Shared types | `packages/shared` |
+| Client              | `apps/client`                              |
+| Server              | `apps/server`                              |
+| Shared types        | `packages/shared`                          |
 
 ## Phase 1 status
 
@@ -63,7 +96,6 @@ Implemented:
 
 Not yet:
 
-- Networking / multiplayer (Phase 2)
-- Mobile / touch (Phase 3)
+- Mobile / touch polish (Phase 3)
 - Audio
 - Real responsive sprite scaling on extreme aspect ratios
