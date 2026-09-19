@@ -22,9 +22,10 @@ import {
 
 import type { Game } from '../app/Game'
 import { ARRIVAL_LINE_TOP_Y } from '../config/gameConfig'
-import { ZOMBIE_SPRITES } from '../config/manifest'
+import { ZOMBIE_BODY_BOX, ZOMBIE_SPRITES } from '../config/manifest'
 import { BloodSplat } from '../entities/BloodSplat'
 import { BombBlast } from '../entities/BombBlast'
+import { ShieldHalo } from '../entities/ShieldHalo'
 import { Crosshair } from '../entities/Crosshair'
 import { FireShot } from '../entities/FireShot'
 import { PlayerZombie } from '../entities/PlayerZombie'
@@ -74,6 +75,9 @@ export class GameScene extends Scene {
   // Live bomb explosion, and how long the playfield keeps shaking for it.
   private bombBlast: BombBlast | null = null
   private shakeMsLeft = 0
+  // Shield halos currently playing, each pinned to the zombie it belongs to.
+  // A list rather than a single one: two Gilets can pop in the same instant.
+  private shieldHalos: { halo: ShieldHalo; targetId: string }[] = []
   private lobbyHandler: ((payload: LobbyStatePayload) => void) | null = null
   private gameStartedHandler: ((payload: GameStartedPayload) => void) | null = null
   private stateHandler: ((payload: StatePayload) => void) | null = null
@@ -187,6 +191,8 @@ export class GameScene extends Scene {
     this.bulletRewardFlash = null
     this.bombBlast?.destroy({ children: true })
     this.bombBlast = null
+    for (const { halo } of this.shieldHalos) halo.destroy({ children: true })
+    this.shieldHalos = []
     if (this.lobbyHandler) {
       this.game.net.off('lobby-state', this.lobbyHandler)
       this.lobbyHandler = null
@@ -240,7 +246,9 @@ export class GameScene extends Scene {
     this.updateBulletRewardFlash()
     // Pixi's delta is in frame units (1 ≈ 16.67 ms at 60 fps); the blast is
     // timed in real milliseconds so it plays the same on any refresh rate.
-    this.updateBombBlast((delta * 1000) / 60)
+    const deltaMs = (delta * 1000) / 60
+    this.updateBombBlast(deltaMs)
+    this.updateShieldHalos(deltaMs)
     this.draftOverlay?.tick()
     if (!this.gameStarted) return
     this.crosshair.position.set(this.game.input.pointer.x, this.game.input.pointer.y)
@@ -444,6 +452,8 @@ export class GameScene extends Scene {
     // The blast is public and comes before anything else: the bomber receives
     // this event too, and should see their own explosion.
     if (payload.killedIds?.length) this.playBombBlast(payload.killedIds)
+    // Same reasoning for the halo: its owner should see their own save.
+    if (payload.bonusId === 'vest') this.playShieldHalo(payload.playerId)
 
     if (payload.playerId === this.game.net.id) {
       this.bonusSpent = true
@@ -456,6 +466,39 @@ export class GameScene extends Scene {
     const info = BONUS_INFO[payload.bonusId]
     if (!info.usedMessage) return
     this.addDeathBanner(`${info.icon} ${payload.username} ${info.usedMessage}`)
+  }
+
+  private playShieldHalo(playerId: string): void {
+    const zombie = this.remoteZombies.get(playerId)
+    // The shot came from somewhere, so the target is on screen for everyone
+    // — but a client that just joined may not have reconciled it yet.
+    if (!zombie) return
+    const box = ZOMBIE_BODY_BOX[zombie.type]
+    const halo = new ShieldHalo(Math.max(box.width, box.height))
+    this.gameLayer.addChild(halo)
+    this.shieldHalos.push({ halo, targetId: playerId })
+    this.positionShieldHalo(halo, playerId)
+  }
+
+  // Follows the zombie rather than freezing where the shot landed: a body
+  // swap destroys and rebuilds that sprite, so the halo is re-pinned by id
+  // every frame instead of holding a reference that may go stale.
+  private positionShieldHalo(halo: ShieldHalo, targetId: string): void {
+    const zombie = this.remoteZombies.get(targetId)
+    if (!zombie) return
+    const box = ZOMBIE_BODY_BOX[zombie.type]
+    halo.position.set(zombie.x, zombie.y - box.height / 2)
+    // The layer sorts its children by y for pseudo-3D depth; sit just in
+    // front of the zombie the halo belongs to.
+    halo.zIndex = zombie.y + 0.5
+  }
+
+  private updateShieldHalos(deltaMs: number): void {
+    if (this.shieldHalos.length === 0) return
+    this.shieldHalos = this.shieldHalos.filter(({ halo, targetId }) => {
+      this.positionShieldHalo(halo, targetId)
+      return halo.update(deltaMs)
+    })
   }
 
   private playBombBlast(killedIds: string[]): void {
