@@ -19,6 +19,19 @@ export const WORLD_HEIGHT = 886
 export const ARRIVAL_LINE_MARGIN = 80
 export const ARRIVAL_LINE_X = WORLD_WIDTH - ARRIVAL_LINE_MARGIN
 
+// Points awarded for crossing the arrival line, indexed by finishing rank.
+// The gap between 1st and 2nd is deliberately the widest: winning the race
+// still pays, but every finisher scores. Ranks past the table all earn the
+// last value, so arriving 9th never scores worse than arriving 7th — and
+// finishing always beats dying, which is worth 0.
+export const ARRIVAL_POINTS = [7, 5, 4, 3, 2, 1] as const
+
+// `rank` is 1-based: the first player across the line is rank 1.
+export function arrivalPointsFor(rank: number): number {
+  const index = Math.min(Math.max(rank, 1), ARRIVAL_POINTS.length) - 1
+  return ARRIVAL_POINTS[index]!
+}
+
 export const SERVER_TICK_HZ = 30
 
 // Movement speeds are expressed in px/frame at a 60 FPS reference, matching
@@ -67,6 +80,11 @@ export interface PlayerState extends ZombieState {
   // render every other player's crosshair.
   pointer: { x: number; y: number }
   username: string
+  // True once the player crossed the arrival line. A finisher is out of the
+  // race: safe from bullets, deaf to input, and walking off-screen on its
+  // own. The client uses it to drop their crosshair and, for the local
+  // player, to switch to spectator mode.
+  hasFinished: boolean
 }
 
 // Hard cap on stored username length. Trimmed and sliced server-side so a
@@ -247,10 +265,12 @@ export interface LeaderboardEntry {
   lastDelta: number
 }
 
-// Game end has two outcomes:
-//   - 'arrival': a player crossed the arrival line. `winnerId`/`winnerUsername`
-//     identify them.
-//   - 'all-dead': every connected player died. No winner; the client shows
+// A round runs until nobody is still racing — every player has crossed the
+// line or died. Game end then has two outcomes:
+//   - 'arrival': at least one player finished. `winnerId`/`winnerUsername`
+//     identify the *first* one across; the later finishers scored too (see
+//     ARRIVAL_POINTS) and show up in the leaderboard.
+//   - 'all-dead': nobody made it. No winner; the client shows
 //     "Vous êtes tous morts !" instead of the usual win/lose split.
 export type GameEndReason = 'arrival' | 'all-dead'
 export interface GameEndedPayload {
@@ -258,6 +278,17 @@ export interface GameEndedPayload {
   winnerId?: string
   winnerUsername?: string
   leaderboard?: LeaderboardEntry[]
+}
+
+// Broadcast the moment a player crosses the arrival line, while the round is
+// still running for everyone else. Carries the rank and points because the
+// client cannot derive them: finishers are dropped from the snapshot once
+// they walk off the world, so counting `hasFinished` flags would undercount.
+export interface PlayerArrivedPayload {
+  id: string
+  username: string
+  rank: number
+  points: number
 }
 
 export interface PlayerLeftPayload {
@@ -355,6 +386,7 @@ export interface ServerToClientEvents {
   'shot-fired': (payload: ShotFiredPayload) => void
   'player-killed': (payload: PlayerKilledPayload) => void
   'game-ended': (payload: GameEndedPayload) => void
+  'player-arrived': (payload: PlayerArrivedPayload) => void
   'player-left': (payload: PlayerLeftPayload) => void
   'bonus-draft-started': (payload: BonusDraftStartedPayload) => void
   'bonus-draft-progress': (payload: BonusDraftProgressPayload) => void

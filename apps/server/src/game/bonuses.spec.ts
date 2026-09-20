@@ -20,6 +20,7 @@ function makePlayer(over: Partial<PlayerInternalState> = {}): PlayerInternalStat
     color: 0xff5252,
     pointer: { x: 0, y: 0 },
     username: 'Antoine',
+    hasFinished: false,
     bonus: null,
     bonusCharges: 0,
     runMultiplier: 1,

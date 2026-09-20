@@ -1,5 +1,6 @@
 import {
   ARRIVAL_LINE_X,
+  ARRIVAL_POINTS,
   BONUS_IDS,
   BOT_COUNT,
   SERVER_TICK_HZ,
@@ -7,6 +8,7 @@ import {
   SPAWN_BAND_X,
   WALK_SPEED,
   RUN_SPEED,
+  WORLD_WIDTH,
   type BonusId,
 } from '@hips/shared'
 
@@ -427,12 +429,28 @@ describe('GameRoomService — win condition', () => {
     expect(room.tickAndCheckWinner()).toBeNull()
   })
 
-  it('declares the player who crosses the arrival line as winner', () => {
-    // Teleport 'a' just past the line so the next tick triggers the check.
+  it('keeps the round running while a racer is still on the field', () => {
+    // 'a' crosses but 'b' is still running: the round no longer stops at the
+    // first arrival, it waits for everyone to finish or die.
     room.teleportForTest('a', ARRIVAL_LINE_X + 1)
+    expect(room.tickAndCheckWinner()).toBeNull()
+    expect(room.snapshotLobby().status).toBe('running')
+  })
+
+  it('declares the first player across the line as winner once the field empties', () => {
+    room.teleportForTest('a', ARRIVAL_LINE_X + 1)
+    room.tickAndCheckWinner()
+    room.teleportForTest('b', ARRIVAL_LINE_X + 1)
     const winner = room.tickAndCheckWinner()
     expect(winner).toEqual({ reason: 'arrival', winnerId: 'a' })
     expect(room.snapshotLobby().status).toBe('ended')
+  })
+
+  it('declares the first finisher as winner even when the rest die', () => {
+    room.teleportForTest('a', ARRIVAL_LINE_X + 1)
+    room.tickAndCheckWinner()
+    room.killForTest('b')
+    expect(room.tickAndCheckWinner()).toEqual({ reason: 'arrival', winnerId: 'a' })
   })
 
   it('credits +7 to the player who crosses the arrival line', () => {
@@ -465,6 +483,122 @@ describe('GameRoomService — win condition', () => {
     room.tickAndCheckWinner()
     const board = room.snapshotLeaderboard()
     expect(board.every((e) => e.total === 0 && e.lastDelta === 0)).toBe(true)
+  })
+})
+
+describe('GameRoomService — arrival scoring', () => {
+  let room: GameRoomService
+
+  // Walks `id` across the line and runs the tick that registers the arrival.
+  function finish(room: GameRoomService, id: string): void {
+    room.teleportForTest(id, ARRIVAL_LINE_X + 1)
+    room.tickAndCheckWinner()
+  }
+
+  function totalFor(room: GameRoomService, id: string): number {
+    return room.snapshotLeaderboard().find((e) => e.id === id)!.total
+  }
+
+  beforeEach(() => {
+    room = new GameRoomService()
+    room.addPlayer('a')
+    room.addPlayer('b')
+    room.addPlayer('c')
+    startRound(room, 'a')
+  })
+
+  it('credits arrival points by finishing position', () => {
+    finish(room, 'a')
+    finish(room, 'b')
+    finish(room, 'c')
+    expect(totalFor(room, 'a')).toBe(ARRIVAL_POINTS[0])
+    expect(totalFor(room, 'b')).toBe(ARRIVAL_POINTS[1])
+    expect(totalFor(room, 'c')).toBe(ARRIVAL_POINTS[2])
+  })
+
+  it('floors arrival points at one for finishers past the table', () => {
+    const late = new GameRoomService()
+    const ids = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6']
+    ids.forEach((id) => late.addPlayer(id))
+    startRound(late, 'p0')
+    ids.forEach((id) => finish(late, id))
+    expect(totalFor(late, 'p6')).toBe(1)
+  })
+
+  it('credits nothing to a player who dies before the line', () => {
+    room.killForTest('b')
+    finish(room, 'a')
+    finish(room, 'c')
+    expect(totalFor(room, 'b')).toBe(0)
+  })
+
+  it('never credits a corpse pushed past the line', () => {
+    room.killForTest('b')
+    room.teleportForTest('b', ARRIVAL_LINE_X + 1)
+    room.tickAndCheckWinner()
+    expect(totalFor(room, 'b')).toBe(0)
+  })
+
+  it('marks a finisher as finished in the snapshot', () => {
+    finish(room, 'a')
+    const a = room.snapshotState().players.find((p) => p.id === 'a')!
+    expect(a.hasFinished).toBe(true)
+  })
+
+  it('walks a finisher onward even with no input pressed', () => {
+    finish(room, 'a')
+    const before = room.snapshotState().players.find((p) => p.id === 'a')!.x
+    room.tickAndCheckWinner()
+    const after = room.snapshotState().players.find((p) => p.id === 'a')!.x
+    expect(after).toBeGreaterThan(before)
+  })
+
+  it('drops a finisher from the snapshot once they walk off the world', () => {
+    finish(room, 'a')
+    // Far enough past the right edge that the next tick clears the margin.
+    room.teleportForTest('a', WORLD_WIDTH + 500)
+    room.tickAndCheckWinner()
+    const ids = room.snapshotState().players.map((p) => p.id)
+    expect(ids).not.toContain('a')
+  })
+
+  it('makes a finisher untargetable', () => {
+    finish(room, 'a')
+    const a = room.snapshotState().players.find((p) => p.id === 'a')!
+    const shot = room.fire('b', { x: a.x, y: a.y - 10 })
+    expect(shot!.hit).toBeNull()
+  })
+
+  it('stops a finisher from firing', () => {
+    finish(room, 'a')
+    expect(room.fire('a', { x: 100, y: 100 })).toBeNull()
+  })
+
+  it('stops a finisher from using their bonus', () => {
+    room.forceBonusForTest('a', 'bomb')
+    finish(room, 'a')
+    expect(room.useBonus('a')).toBeNull()
+  })
+
+  it('reports each arrival once, with its rank and points', () => {
+    finish(room, 'a')
+    expect(room.drainArrivals()).toEqual([
+      { id: 'a', username: expect.any(String), rank: 1, points: ARRIVAL_POINTS[0] },
+    ])
+    expect(room.drainArrivals()).toEqual([])
+  })
+
+  it('restarts the ranking at one on the next round', () => {
+    finish(room, 'a')
+    finish(room, 'b')
+    finish(room, 'c')
+    room.replay('a')
+    startRound(room, 'a')
+    room.drainArrivals()
+    finish(room, 'b')
+    expect(room.drainArrivals()).toEqual([
+      { id: 'b', username: expect.any(String), rank: 1, points: ARRIVAL_POINTS[0] },
+    ])
   })
 })
 
@@ -529,6 +663,9 @@ describe('GameRoomService — replay', () => {
     room.addPlayer('b')
     startRound(room, 'a')
     room.teleportForTest('a', 9999)
+    room.tickAndCheckWinner()
+    // 'b' never makes it: the round only ends once nobody is still racing.
+    room.killForTest('b')
     room.tickAndCheckWinner()
   })
 
@@ -758,8 +895,11 @@ describe('GameRoomService — leaderboard snapshot', () => {
     room.addPlayer('a', 'Ana')
     room.addPlayer('b', 'Bob')
     startRound(room, 'a')
-    // Round 1: 'a' arrives → a.total=7, a.delta=7
+    // Round 1: 'a' arrives first → a.total=7, a.delta=7. 'b' dies, so the
+    // round ends with nobody left racing.
     room.teleportForTest('a', ARRIVAL_LINE_X + 1)
+    room.tickAndCheckWinner()
+    room.killForTest('b')
     room.tickAndCheckWinner()
     // Replay zeroes a.delta but keeps a.total=7.
     room.replay('a')
@@ -767,6 +907,8 @@ describe('GameRoomService — leaderboard snapshot', () => {
     // Round 2: 'b' arrives → b.total=7, b.delta=7. 'a' didn't score this round
     // so a.delta=0. Both players tie on total=7 — lastDelta breaks the tie.
     room.teleportForTest('b', ARRIVAL_LINE_X + 1)
+    room.tickAndCheckWinner()
+    room.killForTest('a')
     room.tickAndCheckWinner()
     const board = room.snapshotLeaderboard()
     expect(board.map((e) => e.id)).toEqual(['b', 'a'])
@@ -869,6 +1011,9 @@ describe('GameRoomService — draft lifecycle', () => {
     room.start('a')
     room.resolveDraft()
     room.teleportForTest('a', ARRIVAL_LINE_X)
+    room.tickAndCheckWinner()
+    // 'b' never finishes, so the round only ends once they are out.
+    room.killForTest('b')
     room.tickAndCheckWinner()
     expect(room.replay('a')).toBe(true)
     expect(room.snapshotLobby().status).toBe('waiting')
@@ -1050,7 +1195,11 @@ describe('GameRoomService — useBonus guards', () => {
 
   it('refuses to use a bonus once the round has ended', () => {
     room.forceBonusForTest('a', 'bomb')
-    room.teleportForTest('a', ARRIVAL_LINE_X + 1)
+    // Ended via the all-dead route on purpose: ending it by crossing the line
+    // would make 'a' a finisher, and the finisher guard would mask the status
+    // guard this test is about.
+    room.killForTest('a')
+    room.killForTest('b')
     room.tickAndCheckWinner()
     expect(room.snapshotLobby().status).toBe('ended')
     expect(room.useBonus('a')).toBeNull()

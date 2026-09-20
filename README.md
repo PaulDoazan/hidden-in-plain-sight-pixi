@@ -41,6 +41,22 @@ Then open http://localhost:5173.
 
 Win condition: cross the dashed line on the right of the play area.
 
+## Scoring
+
+Crossing the line is worth points to **everyone who makes it**, not just the
+winner — 7 / 5 / 4 / 3 / 2 / 1 by finishing position, and 1 pt for anyone
+arriving after the sixth. Killing another player is worth 2 and refunds the
+bullet. Dying before the line is worth nothing.
+
+The round therefore no longer stops at the first arrival: it runs until every
+player has either crossed or been killed. A finisher is out of the race —
+untargetable, disarmed, deaf to input, their bonus spent or not — and their
+zombie simply walks off the right of the screen while the rest of the field
+keeps running. The player announced as the winner is the first one across.
+
+The table lives in `packages/shared` (`ARRIVAL_POINTS`), the ranking in
+`GameRoomService`.
+
 ## Bonus system
 
 Every round opens on a **draft**: each player is offered three bonuses and
@@ -90,7 +106,7 @@ Implemented:
 - Monorepo bootstrapped (pnpm workspaces, ESLint, Prettier, Vitest)
 - NestJS placeholder (`apps/server`) returning `{ status: 'ok', phase: 1 }`
 - PixiJS v8 client with Home / Loading / Game / End scenes
-- Solo sandbox gameplay: 1 player + 20 bots, mouse aim, single bullet, walk/run controls, arrival line victory
+- Solo sandbox gameplay: 1 player + 20 bots, mouse aim, single bullet, walk/run controls, degressive arrival scoring
 - Asset pipeline copying spritesheets from the original CreateJS project
 - Docker Compose setup (`client` + `server` dev services)
 

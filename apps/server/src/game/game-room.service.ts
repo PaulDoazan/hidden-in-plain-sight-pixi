@@ -5,6 +5,7 @@ import type {
   InputPayload,
   LeaderboardEntry,
   LobbyStatePayload,
+  PlayerArrivedPayload,
   PlayerState,
   RoomStatus,
   StatePayload,
@@ -13,6 +14,7 @@ import type {
 import {
   ARRIVAL_LINE_X,
   BONUS_IDS,
+  arrivalPointsFor,
   BOT_COUNT,
   RUN_SPEED,
   SERVER_TICK_HZ,
@@ -66,6 +68,10 @@ const CROSSHAIR_PALETTE: number[] = [
 // Bot wandering cadence: how many server ticks before flipping between
 // walk and idle. Tuned at 30 Hz — original Phase 1 used 40-200 at 60 FPS,
 // so we halve to keep the same wall-clock duration.
+// How far past the right edge a finisher walks before clients stop being
+// told about it. Roughly a sprite width, so it slides fully out of view.
+const OFF_WORLD_MARGIN = 120
+
 const BOT_MIN_TICK = 20
 const BOT_MAX_TICK = 100
 
@@ -105,6 +111,13 @@ export class GameRoomService {
   // Per-room cumulative scores. Survives replay() so a series of games in
   // the same room feels like a tournament; cleared when the room empties.
   private readonly scores = new Map<string, { total: number; lastDelta: number }>()
+  // Arrival bookkeeping for the current round. `finishedCount` drives the
+  // degressive point table, `firstFinisherId` is the winner announced at the
+  // end, and `pendingArrivals` buffers the events the gateway drains each
+  // tick. All three are reset when a round's lineup is spawned.
+  private finishedCount = 0
+  private firstFinisherId: string | null = null
+  private pendingArrivals: PlayerArrivedPayload[] = []
   private status: RoomStatus = 'waiting'
   // Host-controlled: the bonuses a round may draw from. Starts as the whole
   // catalogue; an empty set means the round skips the draft entirely and
@@ -335,6 +348,9 @@ export class GameRoomService {
   ): { bonusId: BonusId; reveal: boolean; killedIds?: string[] } | null {
     if (this.status !== 'running') return null
     const player = this.players.get(playerId)
+    // A finisher is safe behind the line; letting them still drop a bomb on
+    // the pack would turn that safety into a free offensive position.
+    if (player?.hasFinished) return null
     if (!player?.bonus || player.bonusCharges <= 0) return null
     const def = BONUS_REGISTRY[player.bonus]
     if (!def.onActivate) return null
@@ -369,6 +385,11 @@ export class GameRoomService {
     }
     this.shuffle(slots)
 
+    // A fresh round starts the ranking over; totals in `this.scores` carry on.
+    this.finishedCount = 0
+    this.firstFinisherId = null
+    this.pendingArrivals = []
+
     // y is stratified over the shuffled lineup: each slot gets its own equal
     // vertical sub-band, so the spread is even across players and bots alike.
     const total = slots.length
@@ -395,7 +416,7 @@ export class GameRoomService {
 
   applyInput(id: string, input: InputPayload): void {
     const player = this.players.get(id)
-    if (!player) return
+    if (!player || player.hasFinished) return
     this.inputs.set(id, input)
     // Pointer is surfaced on the player so every snapshot carries the
     // up-to-date crosshair position for remote rendering.
@@ -407,6 +428,14 @@ export class GameRoomService {
     for (const player of this.players.values()) {
       if (!player.isAlive) {
         player.animation = 'die'
+        continue
+      }
+      if (player.hasFinished) {
+        // Out of the race but still on screen: a finisher keeps walking right
+        // under its own steam until it leaves the world, exactly like a bot
+        // that crosses. No clamp — leaving is the point.
+        player.animation = 'walk'
+        player.x += WALK_SPEED * GameRoomService.TICK_SCALE
         continue
       }
       const input = this.inputs.get(player.id)
@@ -424,6 +453,7 @@ export class GameRoomService {
       // Clamp to play area on x; y is fixed (no vertical movement in MVP).
       if (player.x < 0) player.x = 0
       if (player.x > WORLD_WIDTH) player.x = WORLD_WIDTH
+      if (player.x >= ARRIVAL_LINE_X) this.registerArrival(player)
     }
     this.tickBots()
   }
@@ -431,9 +461,13 @@ export class GameRoomService {
   // Drops the server-private fields (bonus, charges, speed) so a snapshot
   // never leaks a player's drafted bonus to the rest of the room.
   private snapshotPlayers(): PlayerState[] {
-    return [...this.players.values()].map(
-      ({ bonus: _b, bonusCharges: _c, runMultiplier: _m, ...rest }) => rest,
-    )
+    return [...this.players.values()]
+      // A finisher that walked past the right edge is gone for good: keeping
+      // it in the snapshot would have every client render a zombie stuck
+      // against the screen border for the rest of the round. It stays in
+      // `this.players` though — the leaderboard and the end condition need it.
+      .filter((p) => p.x <= WORLD_WIDTH + OFF_WORLD_MARGIN)
+      .map(({ bonus: _b, bonusCharges: _c, runMultiplier: _m, ...rest }) => rest)
   }
 
   snapshotState(): StatePayload {
@@ -441,37 +475,43 @@ export class GameRoomService {
   }
 
   // Convenience method: tick + end-of-game check, used by the gateway loop.
-  // Two end conditions:
-  //   - a player crosses the arrival line → that player wins
-  //   - every connected player is dead → game ends with no winner
-  // Bots never count for either: only entries in `this.players` are inspected.
+  // The round runs until nobody is still racing — every player has either
+  // crossed the line or died. The winner announced is the *first* finisher;
+  // with no finisher at all the room ends on 'all-dead'. Bots never count:
+  // only entries in `this.players` are inspected.
   tickAndCheckWinner():
     | { reason: 'arrival'; winnerId: string }
     | { reason: 'all-dead' }
     | null {
     if (this.status !== 'running') return null
     this.tick()
+    if (this.players.size === 0) return null
     for (const p of this.players.values()) {
-      if (p.isAlive && p.x >= ARRIVAL_LINE_X) {
-        this.status = 'ended'
-        this.creditPoints(p.id, 7)
-        return { reason: 'arrival', winnerId: p.id }
-      }
+      if (p.isAlive && !p.hasFinished) return null
     }
-    if (this.players.size > 0) {
-      let anyAlive = false
-      for (const p of this.players.values()) {
-        if (p.isAlive) {
-          anyAlive = true
-          break
-        }
-      }
-      if (!anyAlive) {
-        this.status = 'ended'
-        return { reason: 'all-dead' }
-      }
-    }
-    return null
+    this.status = 'ended'
+    return this.firstFinisherId
+      ? { reason: 'arrival', winnerId: this.firstFinisherId }
+      : { reason: 'all-dead' }
+  }
+
+  // Hands the gateway the arrivals registered since the last call, so it can
+  // broadcast them while the round is still going. Draining rather than
+  // exposing the list keeps each arrival announced exactly once.
+  drainArrivals(): PlayerArrivedPayload[] {
+    const arrivals = this.pendingArrivals
+    this.pendingArrivals = []
+    return arrivals
+  }
+
+  private registerArrival(player: PlayerInternalState): void {
+    player.hasFinished = true
+    this.finishedCount += 1
+    const rank = this.finishedCount
+    const points = arrivalPointsFor(rank)
+    this.creditPoints(player.id, points)
+    this.firstFinisherId ??= player.id
+    this.pendingArrivals.push({ id: player.id, username: player.username, rank, points })
   }
 
   // Test-only helper.
@@ -517,12 +557,13 @@ export class GameRoomService {
     const shooter = this.players.get(shooterId)
     // Note: dead shooters are intentionally allowed to fire — a player can
     // still take revenge after being killed, per the original game design.
-    if (!shooter || shooter.bulletsRemaining <= 0) return null
+    // A finisher is a spectator: safe from bullets, and disarmed in return.
+    if (!shooter || shooter.hasFinished || shooter.bulletsRemaining <= 0) return null
 
     shooter.bulletsRemaining -= 1
 
     const playerCandidates = [...this.players.values()].filter(
-      (p) => p.id !== shooterId,
+      (p) => p.id !== shooterId && !p.hasFinished,
     )
     // Bots share the same hit-detection pipeline (point-in-AABB on the server
     // mirrors the client visual). Wasting a bullet on a bot is part of the
@@ -682,6 +723,7 @@ export class GameRoomService {
       // first input event there's still a valid crosshair to render.
       pointer: { x, y: y - 60 },
       username: this.usernames.get(id) ?? '',
+      hasFinished: false,
       bonus: null,
       bonusCharges: 0,
       runMultiplier: 1,

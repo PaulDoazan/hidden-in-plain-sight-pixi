@@ -317,6 +317,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
       const result = room.tickAndCheckWinner()
       this.server.to(code).emit('state', room.snapshotState())
+      // Announced before any 'game-ended': the last arrival of a round is
+      // registered by the very tick that ends it, and a client that learned
+      // its rank only through the leaderboard would miss the banner.
+      for (const arrival of room.drainArrivals()) {
+        this.server.to(code).emit('player-arrived', arrival)
+      }
       if (result) {
         this.stopTickLoop(code)
         const leaderboard = room.snapshotLeaderboard()
