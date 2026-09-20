@@ -74,6 +74,11 @@ export class EndScene extends Scene {
       typed?.reason === 'arrival' ? typed.winnerUsername : ''
     const titleText = allDead ? 'Vous êtes tous morts !' : won ? 'Gagné' : 'Perdu'
     const titleFontSize = allDead ? 56 : 80
+    // The jingle lands with the title, after the finish-line whoosh the round
+    // scene already played. A wipe counts as a loss for everyone. The music is
+    // left alone on purpose: the round's theme plays on under the scoreboard,
+    // and only going back to the lobby switches it.
+    this.game.audio.play(won ? 'victory' : 'defeat')
 
     this.message = new Text({
       text: titleText,

@@ -58,7 +58,7 @@ export class HelpOverlay extends Container {
       this.addChild(text)
     })
 
-    const close = new Button({ label: 'Fermer', onClick: this.onClose })
+    const close = new Button({ label: 'Fermer', sound: 'ui-cancel', onClick: this.onClose })
     close.position.set(w / 2, h / 2 + 160)
     this.addChild(close)
   }

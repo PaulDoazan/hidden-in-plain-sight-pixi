@@ -1,6 +1,8 @@
 import { BONUS_IDS, BONUS_INFO, type BonusId } from '@hips/shared'
 import { Container, Graphics, Text } from 'pixi.js'
 
+import { audio } from '../systems/AudioManager'
+
 import { Button } from './Button'
 import { IconButton } from './IconButton'
 
@@ -195,7 +197,10 @@ export class WaitingRoomOverlay extends Container {
       if (this.isHost_) {
         entry.eventMode = 'static'
         entry.cursor = 'pointer'
-        entry.on('pointertap', () => this.onToggleBonus(bonusId, !enabled))
+        entry.on('pointertap', () => {
+          audio.play('ui-click')
+          this.onToggleBonus(bonusId, !enabled)
+        })
       }
       this.addChild(entry)
     })

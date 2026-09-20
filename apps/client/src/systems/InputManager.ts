@@ -10,6 +10,8 @@ export class InputManager {
   // Edge-triggered like firedThisFrame: B (or the mobile bonus button) sets
   // it, the scene's update loop consumes it exactly once.
   private bonusThisFrame = false
+  // Same edge-trigger for the M mute shortcut, consumed by Game's ticker.
+  private muteThisFrame = false
   // Virtual key state driven by the mobile on-screen controls. Folded into
   // isDown() so the rest of the game can stay agnostic of input source.
   private virtualSpace = false
@@ -52,6 +54,12 @@ export class InputManager {
     return used
   }
 
+  consumeMute(): boolean {
+    const toggled = this.muteThisFrame
+    this.muteThisFrame = false
+    return toggled
+  }
+
   // Mobile controls bridge: the on-screen walk/run buttons toggle these flags
   // so isDown(' ') / isDown('Shift') stay the single source of truth for
   // movement state.
@@ -80,6 +88,11 @@ export class InputManager {
   private onKeyDown = (event: KeyboardEvent) => {
     this.keys.add(event.key)
     if (event.key === 'b' || event.key === 'B') this.bonusThisFrame = true
+    // The home screen and the join dialog hold real <input> elements, and the
+    // pseudo "Marmotte" must not mute the game twice while being typed.
+    if ((event.key === 'm' || event.key === 'M') && !isTextEntry(event.target)) {
+      this.muteThisFrame = true
+    }
     if (event.key === ' ') event.preventDefault()
   }
 
@@ -102,4 +115,14 @@ export class InputManager {
     // Left mouse, primary pen tip both map to button 0.
     if (event.button === 0) this.firedThisFrame = true
   }
+}
+
+// A keystroke that lands in a text field belongs to that field, not to the
+// game's shortcuts. Checked by tag name rather than by focus so it keeps
+// working for the overlay inputs that live outside the canvas.
+function isTextEntry(target: EventTarget | null): boolean {
+  if (!target || typeof HTMLElement === 'undefined') return false
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable
 }

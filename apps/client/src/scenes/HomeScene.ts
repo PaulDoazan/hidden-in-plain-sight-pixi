@@ -96,11 +96,15 @@ export class HomeScene extends Scene {
 
     this.layout()
 
+    this.game.audio.playMusic('lobby')
     this.game.net.connect()
 
     this.roomCreatedHandler = (payload) => this.onRoomReady(payload)
     this.roomJoinedHandler = (payload) => this.onRoomReady(payload)
-    this.roomJoinFailedHandler = (payload) => this.joinOverlay?.setError(payload.reason)
+    this.roomJoinFailedHandler = (payload) => {
+      this.game.audio.play('ui-error')
+      this.joinOverlay?.setError(payload.reason)
+    }
 
     this.game.net.on('room-created', this.roomCreatedHandler)
     this.game.net.on('room-joined', this.roomJoinedHandler)

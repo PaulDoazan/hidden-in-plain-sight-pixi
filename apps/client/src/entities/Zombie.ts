@@ -79,6 +79,12 @@ export abstract class Zombie extends Container {
     this.current = name
   }
 
+  // Read by the ambience scheduler, which picks a groan, a shuffle or a growl
+  // from what the body is currently doing.
+  get animation(): ZombieAnimation | null {
+    return this.current
+  }
+
   get aabb(): AABB {
     // The hit box follows whatever scale the zombie has been given (e.g. 2× on
     // small screens — see GameScene.makeZombie), so the visual sprite and the

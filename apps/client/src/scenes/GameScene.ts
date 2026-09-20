@@ -10,6 +10,7 @@ import {
   type GameStartedPayload,
   type InputPayload,
   type LobbyStatePayload,
+  type PlayerArrivedPayload,
   type PlayerKilledPayload,
   type PlayerLeftPayload,
   type PlayerState,
@@ -31,12 +32,19 @@ import { FireShot } from '../entities/FireShot'
 import { PlayerZombie } from '../entities/PlayerZombie'
 import type { Layout } from '../systems/Layout'
 import { isMobileDevice } from '../systems/Platform'
+import { bonusSoundEvent, pickZombieVoice } from '../systems/SoundBank'
+import { ZombieAmbience, panForWorldX } from '../systems/ZombieAmbience'
 import { BonusDraftOverlay } from '../ui/BonusDraftOverlay'
 import { MobileControls } from '../ui/MobileControls'
 import { WaitingRoomOverlay } from '../ui/WaitingRoomOverlay'
 
 import { EndScene } from './EndScene'
 import { Scene } from './Scene'
+
+// French ordinal for a finishing rank: 1er, then 2e, 3e, …
+function ordinal(rank: number): string {
+  return rank === 1 ? '1er' : `${rank}e`
+}
 
 // Max gap between two taps on the play surface for them to count as a
 // double-tap (which fires on mobile).
@@ -86,9 +94,15 @@ export class GameScene extends Scene {
   private bonusUsedHandler: ((payload: BonusUsedPayload) => void) | null = null
   private gameEndedHandler: ((payload: GameEndedPayload) => void) | null = null
   private playerLeftHandler: ((payload: PlayerLeftPayload) => void) | null = null
+  private playerArrivedHandler: ((payload: PlayerArrivedPayload) => void) | null = null
   private gameStarted = false
+  // True once this player crossed the line. They are safe and disarmed from
+  // then on, so the scene drops into spectator mode until the round ends.
+  private hasFinished = false
   private remoteZombies = new Map<string, PlayerZombie>()
   private remoteCrosshairs = new Map<string, Crosshair>()
+  // Schedules the crowd's groans — see updateZombieAmbience.
+  private readonly ambience = new ZombieAmbience()
   private arrivalLineX = 0
   private lastSentInput: InputPayload | null = null
   private worldPointer = { x: 0, y: 0 }
@@ -148,6 +162,9 @@ export class GameScene extends Scene {
     this.buildBackground()
     this.setupMobileUI()
     this.showWaitingOverlay()
+    // This scene opens on the waiting room, and it is also where a Replay lands
+    // — both are "back in the lobby", so the lobby theme comes back here.
+    this.game.audio.playMusic('lobby')
 
     this.lobbyHandler = (payload) => this.applyLobby(payload)
     this.gameStartedHandler = (payload) => this.startGame(payload)
@@ -157,6 +174,7 @@ export class GameScene extends Scene {
     this.bonusUsedHandler = (payload) => this.onBonusUsed(payload)
     this.gameEndedHandler = (payload) => this.onGameEnded(payload)
     this.playerLeftHandler = (payload) => this.onPlayerLeft(payload)
+    this.playerArrivedHandler = (payload) => this.onPlayerArrived(payload)
     this.bonusDraftStartedHandler = (payload) => this.startDraft(payload)
     this.bonusDraftProgressHandler = (payload) =>
       this.draftOverlay?.setPicked(payload.pickedIds)
@@ -171,6 +189,7 @@ export class GameScene extends Scene {
     this.game.net.on('bonus-used', this.bonusUsedHandler)
     this.game.net.on('game-ended', this.gameEndedHandler)
     this.game.net.on('player-left', this.playerLeftHandler)
+    this.game.net.on('player-arrived', this.playerArrivedHandler)
     this.game.net.on('bonus-draft-started', this.bonusDraftStartedHandler)
     this.game.net.on('bonus-draft-progress', this.bonusDraftProgressHandler)
     this.game.net.on('bonus-granted', this.bonusGrantedHandler)
@@ -179,6 +198,9 @@ export class GameScene extends Scene {
   }
 
   onExit(): void {
+    // Nobody is running on the scoreboard: this scene owns the loop, so it is
+    // the one that has to silence it when it leaves.
+    this.game.audio.setRunLoop(0, 0)
     this.teardownMobileUI()
     this.waitingOverlay?.destroy({ children: true })
     this.waitingOverlay = null
@@ -225,6 +247,10 @@ export class GameScene extends Scene {
       this.game.net.off('player-left', this.playerLeftHandler)
       this.playerLeftHandler = null
     }
+    if (this.playerArrivedHandler) {
+      this.game.net.off('player-arrived', this.playerArrivedHandler)
+      this.playerArrivedHandler = null
+    }
     if (this.bonusDraftStartedHandler) {
       this.game.net.off('bonus-draft-started', this.bonusDraftStartedHandler)
       this.bonusDraftStartedHandler = null
@@ -251,29 +277,54 @@ export class GameScene extends Scene {
     this.updateShieldHalos(deltaMs)
     this.draftOverlay?.tick()
     if (!this.gameStarted) return
-    this.crosshair.position.set(this.game.input.pointer.x, this.game.input.pointer.y)
-    this.worldPointer = this.gameLayer.toLocal({
-      x: this.crosshair.x,
-      y: this.crosshair.y,
-    })
-
-    this.maybeEmitInput()
-
-    if (this.game.input.consumeFire()) {
-      this.game.net.emit('fire', {
-        pointer: { ...this.worldPointer },
-        scale: this.game.layout.zombieScale,
+    // Past the line the player is a spectator: the server drops their input,
+    // their shots and their bonus, so the scene stops offering any of it and
+    // just keeps the field animating until the round ends.
+    if (!this.hasFinished) {
+      this.crosshair.position.set(this.game.input.pointer.x, this.game.input.pointer.y)
+      this.worldPointer = this.gameLayer.toLocal({
+        x: this.crosshair.x,
+        y: this.crosshair.y,
       })
-    }
 
-    if (this.game.input.consumeBonus() && this.canUseBonus()) {
-      this.game.net.emit('use-bonus')
+      this.maybeEmitInput()
+
+      if (this.game.input.consumeFire()) {
+        this.game.net.emit('fire', {
+          pointer: { ...this.worldPointer },
+          scale: this.game.layout.zombieScale,
+        })
+      }
+
+      if (this.game.input.consumeBonus() && this.canUseBonus()) {
+        this.game.net.emit('use-bonus')
+      }
     }
 
     for (const z of this.remoteZombies.values()) {
       z.update(delta)
       z.zIndex = z.y
     }
+
+    this.updateZombieAmbience()
+  }
+
+  // The horde is audible: every zombie on screen groans, shuffles or growls on
+  // its own timer. ZombieAmbience owns the policy that keeps a field of sixty
+  // bodies a background murmur — at most one voice at a time, panned to where
+  // the body stands and quieter the further it is from the player.
+  private updateZombieAmbience(): void {
+    const { canvasWidth, playArea, worldScale } = this.game.layout
+    const me = this.game.net.id ? this.remoteZombies.get(this.game.net.id) : undefined
+    const { voices, run } = this.ambience.update(
+      this.remoteZombies,
+      { canvasWidth, playArea, worldScale, listenerX: me?.x ?? null },
+      Date.now(),
+    )
+    for (const voice of voices) this.game.audio.playVoice(voice.sample, voice)
+    // Running is a state, not an event: the loop follows it every frame and
+    // fades itself out on its own once the field stops sprinting.
+    this.game.audio.setRunLoop(run.intensity, run.pan)
   }
 
   override resize(_layout: Layout): void {
@@ -403,6 +454,7 @@ export class GameScene extends Scene {
   }
 
   private onShotFired(payload: ShotFiredPayload): void {
+    this.game.audio.play(payload.hit ? 'shot-hit' : 'shot')
     const fx = payload.hit ? new BloodSplat(this.game.assets) : new FireShot(this.game.assets)
     fx.position.set(payload.origin.x, payload.origin.y)
     this.gameLayer.addChild(fx)
@@ -411,6 +463,15 @@ export class GameScene extends Scene {
   private onPlayerKilled(payload: PlayerKilledPayload): void {
     const z = this.remoteZombies.get(payload.id)
     if (z) z.die()
+    // A real death groan from where the body fell, over the synthesised impact.
+    this.game.audio.play(payload.id === this.game.net.id ? 'own-death' : 'death')
+    this.game.audio.playVoice(pickZombieVoice('death', Math.random), {
+      pan: z ? panForWorldX(z.x, this.game.layout) : 0,
+      // A bomb wipes a fifth of the field in one tick — one groan per corpse
+      // would be a wall of noise.
+      throttleKey: 'death',
+      throttleMs: 160,
+    })
     // Update local alive flag immediately rather than waiting for the next
     // state snapshot — without this, a quick double-click could squeeze a
     // fire emit between the kill event and the snapshot that flips isAlive.
@@ -428,6 +489,23 @@ export class GameScene extends Scene {
     }
   }
 
+  private onPlayerArrived(payload: PlayerArrivedPayload): void {
+    this.game.audio.play('finish-line')
+    this.addDeathBanner(
+      payload.id === this.game.net.id
+        ? `🏁 Tu franchis la ligne — ${ordinal(payload.rank)} (+${payload.points})`
+        : `🏁 ${payload.username} franchit la ligne — ${ordinal(payload.rank)} (+${payload.points})`,
+    )
+    if (payload.id !== this.game.net.id) return
+    this.hasFinished = true
+    // Everything the player could still act with goes away at once, so the
+    // screen matches what the server will now accept from them: nothing.
+    this.crosshair.visible = false
+    if (this.mobileControls) this.mobileControls.visible = false
+    this.hudBullets = `Arrivé ${ordinal(payload.rank)} (+${payload.points})`
+    this.refreshBonusHud()
+  }
+
   // Only active, unspent bonuses have anything to trigger. The server checks
   // all of this again — this only avoids a pointless round trip.
   private canUseBonus(): boolean {
@@ -442,6 +520,7 @@ export class GameScene extends Scene {
   // server's actual grant and always wins, overwriting whatever the local
   // click set.
   private onBonusGranted(payload: BonusGrantedPayload): void {
+    this.game.audio.play('bonus-granted')
     this.myBonus = payload.bonusId
     this.bonusSpent = false
     this.refreshBonusHud()
@@ -449,6 +528,9 @@ export class GameScene extends Scene {
   }
 
   private onBonusUsed(payload: BonusUsedPayload): void {
+    // Each bonus has its own signature, so the room can tell what just went off
+    // without reading the kill feed.
+    this.game.audio.play(bonusSoundEvent(payload.bonusId))
     // The blast is public and comes before anything else: the bomber receives
     // this event too, and should see their own explosion.
     if (payload.killedIds?.length) this.playBombBlast(payload.killedIds)
@@ -536,6 +618,7 @@ export class GameScene extends Scene {
   }
 
   private showBulletReward(): void {
+    this.game.audio.play('kill-reward')
     if (!this.bulletRewardFlash) {
       this.bulletRewardFlash = new Text({
         text: '+1 balle',
@@ -771,6 +854,13 @@ export class GameScene extends Scene {
   }
 
   private syncRemoteCrosshair(state: PlayerState): void {
+    // A finisher no longer aims: their last pointer position would otherwise
+    // sit frozen on the field for the rest of the round.
+    if (state.hasFinished) {
+      this.remoteCrosshairs.get(state.id)?.destroy({ children: true })
+      this.remoteCrosshairs.delete(state.id)
+      return
+    }
     let crosshair = this.remoteCrosshairs.get(state.id)
     if (!crosshair) {
       crosshair = new Crosshair(state.color)
@@ -862,6 +952,7 @@ export class GameScene extends Scene {
   }
 
   private startDraft(payload: BonusDraftStartedPayload): void {
+    this.game.audio.play('draft-start')
     this.waitingOverlay?.destroy({ children: true })
     this.waitingOverlay = null
     this.myBonus = null
@@ -875,6 +966,7 @@ export class GameScene extends Scene {
       durationMs: payload.durationMs,
       players: this.draftPlayers(),
       onPick: (bonusId) => {
+        this.game.audio.play('card-pick')
         this.myBonus = bonusId
         this.game.net.emit('pick-bonus', { bonusId })
       },
@@ -896,12 +988,21 @@ export class GameScene extends Scene {
     const me = this.game.net.id
     if (!payload.players.some((p) => p.id === me)) return
 
+    this.game.audio.play('game-start')
+    // The round's theme takes over from here and is deliberately never stopped
+    // by this scene: it has to keep running under the scoreboard.
+    this.game.audio.playMusic('round')
     this.waitingOverlay?.destroy({ children: true })
     this.waitingOverlay = null
     this.draftOverlay?.destroy({ children: true })
     this.draftOverlay = null
 
     this.arrivalLineX = payload.arrivalLineX
+    this.hasFinished = false
+    if (this.mobileControls) this.mobileControls.visible = true
+    // Bodies are re-drawn every round, so the previous round's groan timers
+    // belong to ids that no longer exist.
+    this.ambience.reset()
 
     this.spawnCrosshair()
     this.drawArrivalLine()
@@ -940,6 +1041,10 @@ export class GameScene extends Scene {
 
   private refreshHud(state: PlayerState): void {
     this.isAlive = state.isAlive
+    // A finisher's HUD is owned by onPlayerArrived — snapshots keep arriving
+    // for the few ticks they spend walking off-screen and would overwrite it
+    // with a bullet count that no longer means anything.
+    if (state.hasFinished) return
     const alive = state.isAlive ? '' : ' (mort)'
     this.hudBullets = `Balles : ${state.bulletsRemaining}${alive}`
     this.refreshBonusHud()
@@ -947,7 +1052,9 @@ export class GameScene extends Scene {
 
   private refreshBonusHud(): void {
     if (!this.hud) return
-    if (!this.myBonus) {
+    // Same reason the crosshair goes: advertising "[B]" to a finisher would
+    // promise a key that the server now ignores.
+    if (!this.myBonus || this.hasFinished) {
       this.hud.text = this.hudBullets
       return
     }

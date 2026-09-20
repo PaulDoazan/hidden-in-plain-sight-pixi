@@ -78,6 +78,7 @@ export class JoinRoomOverlay extends Container {
 
     this.cancelBtn = new Button({
       label: 'Annuler',
+      sound: 'ui-cancel',
       onClick: () => opts.onCancel(),
     })
     this.addChild(this.cancelBtn)

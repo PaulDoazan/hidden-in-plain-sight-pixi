@@ -6,6 +6,8 @@ import {
   Text,
 } from 'pixi.js'
 
+import { audio } from '../systems/AudioManager'
+
 const BUTTON_SIZE = 44
 const BUTTON_GAP = 28
 const MARGIN_X = 12
@@ -196,6 +198,9 @@ class HoldButton extends Container {
     event.stopPropagation()
     if (this.isActive) return
     this.isActive = true
+    // Touch has no hover or cursor feedback, so the click is the only thing
+    // confirming the press landed on the button rather than beside it.
+    audio.play('ui-click')
     this.drawBg(true)
     this.onDown()
   }
@@ -260,6 +265,7 @@ class IconButton extends Container {
 
   private handleDown = (event: FederatedPointerEvent) => {
     event.stopPropagation()
+    audio.play('ui-click')
     if (document.fullscreenElement) {
       void document.exitFullscreen?.()
     } else {

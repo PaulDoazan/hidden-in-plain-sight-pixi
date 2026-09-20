@@ -1,6 +1,9 @@
 import { Container, Graphics } from 'pixi.js'
 
-export type IconKind = 'copy' | 'check'
+import { audio } from '../systems/AudioManager'
+import type { SoundEvent } from '../systems/SoundBank'
+
+export type IconKind = 'copy' | 'check' | 'sound-on' | 'sound-off'
 
 export interface IconButtonOptions {
   size?: number
@@ -9,6 +12,8 @@ export interface IconButtonOptions {
   borderColor?: number
   initialIcon?: IconKind
   onClick: () => void
+  // Same contract as Button: click feedback by default, null to stay silent.
+  sound?: SoundEvent | null
 }
 
 // Square icon button with a Pixi-drawn glyph (no font/SVG asset). The glyph
@@ -40,7 +45,11 @@ export class IconButton extends Container {
 
     this.eventMode = 'static'
     this.cursor = 'pointer'
-    this.on('pointertap', opts.onClick)
+    const sound = opts.sound === undefined ? 'ui-click' : opts.sound
+    this.on('pointertap', () => {
+      if (sound) audio.play(sound)
+      opts.onClick()
+    })
   }
 
   setIcon(kind: IconKind): void {
@@ -50,7 +59,8 @@ export class IconButton extends Container {
   private drawIcon(kind: IconKind): void {
     this.glyph.clear()
     if (kind === 'copy') this.drawCopy()
-    else this.drawCheck()
+    else if (kind === 'check') this.drawCheck()
+    else this.drawSpeaker(kind === 'sound-on')
   }
 
   // MDI `content_copy`: two overlapping rounded squares.
@@ -69,6 +79,41 @@ export class IconButton extends Container {
       .roundRect(-front / 2 + offset, -front / 2 + offset, front, front, 3)
       .fill({ color: 0x1f2937 })
       .stroke({ width: 2, color: this.color })
+  }
+
+  // MDI `volume_up` / `volume_off`: a speaker cone, plus either two sound arcs
+  // or the crossed-out bar. Drawn rather than typed as an emoji so it inherits
+  // the button's color and stays crisp at any resolution.
+  private drawSpeaker(on: boolean): void {
+    const s = this.size * 0.5
+    // Cone: a small rectangle for the driver and a triangle flaring left→right.
+    this.glyph
+      .poly([
+        -s * 0.75, -s * 0.22,
+        -s * 0.4, -s * 0.22,
+        -s * 0.05, -s * 0.6,
+        -s * 0.05, s * 0.6,
+        -s * 0.4, s * 0.22,
+        -s * 0.75, s * 0.22,
+      ])
+      .fill({ color: this.color })
+
+    if (on) {
+      // Two concentric arcs opening to the right, as radiating sound.
+      this.glyph
+        .arc(-s * 0.05, 0, s * 0.35, -Math.PI / 3, Math.PI / 3)
+        .stroke({ width: 2, color: this.color })
+      this.glyph
+        .arc(-s * 0.05, 0, s * 0.62, -Math.PI / 3, Math.PI / 3)
+        .stroke({ width: 2, color: this.color })
+      return
+    }
+    this.glyph
+      .moveTo(s * 0.15, -s * 0.4)
+      .lineTo(s * 0.75, s * 0.4)
+      .moveTo(s * 0.75, -s * 0.4)
+      .lineTo(s * 0.15, s * 0.4)
+      .stroke({ width: 2.5, color: this.color, cap: 'round' })
   }
 
   // MDI `check`: a single check-mark stroke.
