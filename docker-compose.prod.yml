@@ -1,0 +1,18 @@
+services:
+  server:
+    image: marche-ou-creve-server:${IMAGE_TAG:-latest}
+    container_name: marche-ou-creve-server
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:3000:3000'
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # Migration game. -> apex : les deux origines acceptées le temps de basculer.
+      # Retirer https://game.marche-ou-creve.com une fois l'apex en place.
+      CORS_ORIGIN: https://game.marche-ou-creve.com,https://marche-ou-creve.com
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'

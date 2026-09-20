@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+.git
+.github
+.husky
+.vscode
+.idea
+docs
+scripts
+*.md
+.env
+.env.*
+!.env.production
+coverage
+.DS_Store

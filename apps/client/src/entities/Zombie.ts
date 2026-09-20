@@ -12,7 +12,6 @@ export interface ZombieDeps {
 }
 
 export abstract class Zombie extends Container {
-  readonly id: string
   readonly type: ZombieType
   isAlive = true
   private current: ZombieAnimation | null = null
@@ -20,7 +19,6 @@ export abstract class Zombie extends Container {
 
   constructor(deps: ZombieDeps) {
     super()
-    this.id = `${deps.type}-${Math.random().toString(36).slice(2, 8)}`
     this.type = deps.type
 
     const animations: ZombieAnimation[] = ['walk', 'idle', 'die', 'run']
@@ -81,10 +79,16 @@ export abstract class Zombie extends Container {
     this.current = name
   }
 
+  // Read by the ambience scheduler, which picks a groan, a shuffle or a growl
+  // from what the body is currently doing.
+  get animation(): ZombieAnimation | null {
+    return this.current
+  }
+
   get aabb(): AABB {
     // The hit box follows whatever scale the zombie has been given (e.g. 2× on
-    // small screens — see GameScene.spawnBots / spawnPlayer), so the visual
-    // sprite and the click target stay aligned. The box is per-type to track
+    // small screens — see GameScene.makeZombie), so the visual sprite and the
+    // click target stay aligned. The box is per-type to track
     // the zombie's actual silhouette (standing vs. crawling), not the full
     // 96×96 frame.
     const sx = this.scale.x

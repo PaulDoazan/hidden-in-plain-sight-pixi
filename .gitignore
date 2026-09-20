@@ -24,3 +24,7 @@ pnpm-debug.log*
 
 # superpowers
 .superpowers/
+
+# Generated handbook
+docs/handbook-websockets/handbook.html
+docs/handbook-websockets/handbook.pdf
